@@ -25,6 +25,9 @@ LOG_FORMAT="TXT"
 VERBOSE=false
 LOG_FILE=""  # When empty, no log file is created. When specified, all logs go ONLY to this file
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Print usage information
 print_usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -72,8 +75,16 @@ done
 
 # Check if the configuration file exists
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Error: Configuration file '$CONFIG_FILE' not found."
-    exit 1
+    # If config file not found, check if it exists in the script directory
+    if [ -f "$SCRIPT_DIR/$CONFIG_FILE" ]; then
+        CONFIG_FILE="$SCRIPT_DIR/$CONFIG_FILE"
+        if $VERBOSE; then
+            verbose_log "Using configuration file from script directory: $CONFIG_FILE"
+        fi
+    else
+        echo "Error: Configuration file '$CONFIG_FILE' not found."
+        exit 1
+    fi
 fi
 
 # Get current timestamp

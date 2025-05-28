@@ -66,6 +66,20 @@ Run the script with:
 ./autogit-o-matic.sh --verbose --log-file autogit.log
 ```
 
+You can also specify the full path to the script and configuration file:
+
+```bash
+/path/to/autogit-o-matic.sh --config /path/to/autogit-o-matic.ini --log-file /path/to/log/autogit.log
+```
+
+For example:
+
+```bash
+/home/mok/git/AutoGit-o-Matic/autogit-o-matic.sh --config /home/mok/git/AutoGit-o-Matic/autogit-o-matic.ini --log-file ~/RAMDISC/autogit.log
+```
+
+**Note:** If you don't specify a configuration file with `--config`, the script will automatically look for `autogit-o-matic.ini` in the current directory. If it doesn't find it there, it will look for the config file in the same directory as the script itself.
+
 ## Cron Setup
 
 To automate Git operations on a schedule, you can set up a cron job:
