@@ -23,7 +23,7 @@ CONFIG_FILE="autogit-o-matic.ini"
 DRY_RUN=false
 LOG_FORMAT="TXT"
 VERBOSE=false
-LOG_FILE=""
+LOG_FILE=""  # When empty, no log file is created. When specified, all logs go ONLY to this file
 
 # Print usage information
 print_usage() {
@@ -34,7 +34,7 @@ print_usage() {
     echo "  --config FILE    Path to the configuration file (default: autogit-o-matic.ini)"
     echo "  --dry-run        Simulate operations without actually executing Git commands"
     echo "  --verbose, -v    Display more detailed information about operations"
-    echo "  --log-file FILE  Write logs to the specified file"
+    echo "  --log-file FILE  Write logs to the specified file (creates a single log file only at this location)"
     echo "  --help           Display this help message and exit"
     echo ""
 }
@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --log-file)
-            LOG_FILE="$2"
+            LOG_FILE="$2"  # This is the only location where logs will be written to
             shift 2
             ;;
         --help)
@@ -132,7 +132,7 @@ log_operation() {
     # Print to console
     echo "$log_message"
     
-    # Write to log file if specified
+    # Write to log file if specified (ONLY to the centralized log file, not in individual repositories)
     if [ -n "$LOG_FILE" ]; then
         echo "$log_message" >> "$LOG_FILE"
     fi
