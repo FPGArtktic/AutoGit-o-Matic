@@ -1,0 +1,34 @@
+# AutoGit-o-Matic - Example Configuration File
+# Copy this file as autogit-o-matic.ini and customize it to your needs
+
+[SETTINGS]
+# Log format. Available options: TXT, JSON
+log_format = TXT
+
+[PULL]
+# Paths to repositories you want to update using 'git pull'
+# You can provide a direct path to a repository
+/home/user/git/repository1/
+
+# You can also provide a parent directory containing multiple repositories
+# The script will automatically detect all Git repositories in this directory
+/home/user/git/projects/
+
+# Alternative syntax using 'path =' is also possible
+path = /home/user/git/important-project/
+
+[FETCH]
+# Paths to repositories you want to update using 'git fetch'
+# 'fetch' downloads changes but doesn't merge them automatically, which is safer
+# for repositories you're actively working on
+/home/user/git/working-repository/
+
+# As with the [PULL] section, you can specify a parent directory
+/home/user/git/repositories-to-monitor/
+
+# Comments start with '#' or ';'
+; path = /home/user/git/another-project/
+
+# [EXAMPLE OF ANOTHER SECTION]
+# Future versions may support additional sections
+# for other Git operations such as status, push, etc.
