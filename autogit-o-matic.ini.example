@@ -5,6 +5,10 @@
 # Log format. Available options: TXT, JSON
 log_format = TXT
 
+# Exit 2 when at least one repository fails. This becomes the default
+# in 3.0.0; opting in now silences the warning about that change.
+# exit_on_failure = yes
+
 [PULL]
 # Paths to repositories you want to update using 'git pull'
 # You can provide a direct path to a repository

@@ -69,6 +69,17 @@ teardown() {
 	[ ! -d "$LOCK" ]
 }
 
+@test "a second run in a row is not blocked by the first" {
+	run_tool --config config.ini --dry-run
+	[ "$status" -eq 0 ]
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"another run holds"* ]]
+	[ ! -d "$LOCK" ]
+}
+
 @test "two configurations do not lock each other out" {
 	cp -- config.ini other.ini
 	mkdir -p -- "$LOCK"

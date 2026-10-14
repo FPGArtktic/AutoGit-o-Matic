@@ -84,6 +84,15 @@ run_sourced() {
 ${1}"
 }
 
+# run_tool_stdout ARGS...
+# Like run_tool, but $output holds stdout alone, for the tests that
+# read the log stream itself and must not see a warning on stderr.
+run_tool_stdout() {
+	# Unquoted on purpose, as in run_tool.
+	# shellcheck disable=SC2086
+	run --separate-stderr $AUTOGIT_SH "$AUTOGIT" "$@"
+}
+
 # lock_dir_for CONFIG
 # Print the lock directory the script derives from CONFIG's path.
 lock_dir_for() {

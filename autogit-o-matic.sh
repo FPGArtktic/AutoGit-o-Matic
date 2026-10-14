@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=2.1.0
+VERSION=2.2.0
 
 set -u
 
@@ -29,9 +29,10 @@ readonly PROGRAM_NAME=autogit-o-matic
 readonly OUTPUT_LIMIT=150
 # Seconds one git invocation may take, when timeout(1) is installed.
 readonly GIT_TIMEOUT=300
-# Exit codes. 2 (a repository failed) arrives with the summary line.
+# Exit codes (CLAUDE.md 3.5). EXIT_FAILED is opt-in until 3.0.0.
 readonly EXIT_OK=0
 readonly EXIT_USAGE=1
+readonly EXIT_FAILED=2
 readonly EXIT_LOCKED=3
 
 CONFIG_FILE=autogit-o-matic.ini
@@ -39,6 +40,10 @@ DRY_RUN=no
 LOG_FORMAT=TXT
 LOG_FILE=
 VERBOSE=no
+QUIET=no
+STRICT_EXIT=no
+START_TIME=0
+TALLY_FILE=
 SCRIPT_DIR=.
 INI_STREAM=
 LOCK_PATH=
@@ -55,6 +60,8 @@ usage() (
 		  --config FILE    Path to the configuration file (default: autogit-o-matic.ini)
 		  --dry-run        Simulate operations without actually executing Git commands
 		  --verbose, -v    Display more detailed information about operations
+		  --quiet          Print only errors on stdout; a log file still gets everything
+		  --strict-exit    Exit 2 when a repository fails (the default from 3.0.0)
 		  --log-file FILE  Write logs to the specified file as well as to stdout
 		  --version        Print the version and exit
 		  --help           Display this help message and exit
@@ -169,7 +176,86 @@ log() (
 	else
 		line="$(log_txt "${1}" "${2}" "${3}" "${message}")"
 	fi
-	printf '%s\n' "${line}"
+	if [ "${QUIET}" = no ] || [ "${1}" = ERROR ]; then
+		printf '%s\n' "${line}"
+	fi
+	if [ -n "${LOG_FILE}" ]; then
+		printf '%s\n' "${line}" >>"${LOG_FILE}"
+	fi
+)
+
+# run_seconds
+# Print how many seconds the run has taken so far.
+run_seconds() (
+	now="$(date +%s 2>/dev/null)"
+
+	if [ -z "${now}" ] || [ "${START_TIME}" -eq 0 ]; then
+		printf '0\n'
+		return 0
+	fi
+	printf '%s\n' "$((now - START_TIME))"
+)
+
+# tally_add OUTCOME
+# Record one repository outcome. Short appends from parallel jobs do
+# not interleave, so this stays correct under --jobs.
+tally_add() (
+	if [ -z "${TALLY_FILE}" ]; then
+		return 0
+	fi
+	printf '%s\n' "${1}" >>"${TALLY_FILE}"
+)
+
+# tally_count OUTCOME
+# Print how many repositories ended with OUTCOME.
+tally_count() (
+	if [ -z "${TALLY_FILE}" ] || [ ! -f "${TALLY_FILE}" ]; then
+		printf '0\n'
+		return 0
+	fi
+	count="$(grep -c -Fx -- "${1}" "${TALLY_FILE}")"
+	printf '%s\n' "${count}"
+)
+
+# summary_json TIMESTAMP COUNTS SECONDS
+# Print the summary as one JSON object, its fields read out of the
+# "key=value key=value" string the text format uses.
+summary_json() (
+	printf '%s' "${2}" |
+		awk -v stamp="${1}" -v seconds="${3}" '
+		# kcov-exclude-start: awk source, not shell lines
+		{
+			out = "{\"timestamp\":\"" stamp "\""
+			out = out ",\"type\":\"SUMMARY\""
+			for (i = 1; i <= NF; i++) {
+				split($i, kv, "=")
+				out = out ",\"" kv[1] "\":" kv[2] + 0
+			}
+			print out ",\"duration\":" seconds + 0 "}"
+		}
+		# kcov-exclude-stop
+		'
+)
+
+# log_summary
+# Print the one line every run ends with (CLAUDE.md 3.5). Every field
+# is an integer or a literal, so none of them needs JSON escaping.
+log_summary() (
+	now="$(timestamp)"
+	seconds="$(run_seconds)"
+	counts="updated=$(tally_count updated)"
+	counts="${counts} unchanged=$(tally_count unchanged)"
+	counts="${counts} skipped=$(tally_count skipped)"
+	counts="${counts} failed=$(tally_count failed)"
+
+	if [ "${LOG_FORMAT}" = JSON ]; then
+		line="$(summary_json "${now}" "${counts}" "${seconds}")"
+	else
+		line="[${now}] SUMMARY: ${counts} duration=${seconds}s"
+	fi
+	if [ "${QUIET}" = no ]; then
+		printf '%s\n' "${line}"
+	fi
 	if [ -n "${LOG_FILE}" ]; then
 		printf '%s\n' "${line}" >>"${LOG_FILE}"
 	fi
@@ -235,6 +321,14 @@ git_fetch() (
 # Pull PATH with --ff-only, so a run can never create a merge commit.
 git_pull() (
 	git_run "${1}" pull --ff-only
+)
+
+# refs_fingerprint REPO
+# Print a checksum of every ref in REPO, so a mode's effect can be told
+# from no effect without knowing what the mode does.
+refs_fingerprint() (
+	git -C "${1}" for-each-ref --format='%(objectname) %(refname)' |
+		cksum
 )
 
 # git_upstream REPO BRANCH
@@ -405,8 +499,22 @@ run_mode() (
 	esac
 )
 
+# report_success MODE REPO BEFORE OUTPUT
+# Log a successful MODE on REPO and tally it by whether BEFORE still
+# describes its refs.
+report_success() (
+	after="$(refs_fingerprint "${2}")"
+
+	log "${1}" "${2}" Success "${4}"
+	if [ "${3}" = "${after}" ]; then
+		tally_add unchanged
+		return 0
+	fi
+	tally_add updated
+)
+
 # process_repo MODE REPO
-# Run MODE on REPO and log exactly one line about the outcome.
+# Run MODE on REPO, log one line about it, tally the outcome.
 # Returns 0 done, 1 skipped, 2 failed.
 process_repo() (
 	verb="$(mode_verb "${1}")"
@@ -414,20 +522,23 @@ process_repo() (
 	if [ "${DRY_RUN}" = yes ]; then
 		message="$(dry_run_message "${1}")"
 		log "${1}" "${2}" 'Success (Dry Run)' "${message}"
+		tally_add unchanged
 		return 0
 	fi
+	before="$(refs_fingerprint "${2}")"
 	output="$(run_mode "${1}" "${2}")"
 	result="$?"
 	if [ "${result}" -eq 0 ]; then
-		log "${1}" "${2}" Success "${output}"
+		report_success "${1}" "${2}" "${before}" "${output}"
 		return 0
 	fi
 	if [ "${result}" -eq 1 ]; then
 		log WARN "${2}" Skipped "${output}"
+		tally_add skipped
 		return 1
 	fi
-	log ERROR "${2}" Failed \
-		"Failed to execute git ${verb}: ${output}"
+	log ERROR "${2}" Failed "Failed to execute git ${verb}: ${output}"
+	tally_add failed
 	return 2
 )
 
@@ -439,6 +550,7 @@ process_repos() (
 
 	if [ -z "${repos}" ]; then
 		log ERROR "${2}" Failed 'No Git repositories found'
+		tally_add failed
 		return 2
 	fi
 	printf '%s\n' "${repos}" |
@@ -527,15 +639,18 @@ section_values() (
 			'$1 == section && $2 == key { print $3 }'
 )
 
-# apply_settings
+# setting_value KEY
+# Print the first word of KEY's value in [SETTINGS]; nothing if unset.
+# The first word is what 1.0.0 read, so "JSON  # a comment" still works.
+setting_value() (
+	section_values SETTINGS "${1}" | head -n 1 | awk '{ print $1 }'
+)
+
+# set_log_format
 # Set LOG_FORMAT from [SETTINGS]; an unknown value stays TXT.
 # Mutates global state on purpose (CLAUDE.md 3.2).
-apply_settings() {
-	# awk takes the first word, so "JSON  # a comment" still reads as
-	# JSON, the way 1.0.0's regexp did.
-	format="$(section_values SETTINGS log_format | head -n 1 |
-		awk '{ print $1 }')"
-	format="$(printf '%s' "${format}" | tr '[:lower:]' '[:upper:]')"
+set_log_format() {
+	format="$(setting_value log_format | tr '[:lower:]' '[:upper:]')"
 	case "${format}" in
 	TXT | JSON)
 		LOG_FORMAT="${format}"
@@ -546,6 +661,43 @@ apply_settings() {
 	esac
 }
 
+# set_exit_policy
+# Turn on the strict exit code when [SETTINGS] asks for it.
+# Mutates global state on purpose (CLAUDE.md 3.2).
+set_exit_policy() {
+	case "$(setting_value exit_on_failure)" in
+	yes | YES | Yes | true | 1)
+		STRICT_EXIT=yes
+		;;
+	*)
+		# Anything else leaves 2.x exiting 0 on a failed repository.
+		;;
+	esac
+}
+
+# apply_settings
+# Apply every [SETTINGS] key. Mutates global state on purpose.
+apply_settings() {
+	set_log_format
+	set_exit_policy
+}
+
+# exit_code FAILED
+# Print the status this run leaves with. Warns once while the strict
+# code is still opt-in (CLAUDE.md 2.2).
+exit_code() (
+	if [ "${1}" -eq 0 ]; then
+		printf '%s\n' "${EXIT_OK}"
+		return 0
+	fi
+	if [ "${STRICT_EXIT}" = yes ]; then
+		printf '%s\n' "${EXIT_FAILED}"
+		return 0
+	fi
+	warn 'a repository failed; 3.0.0 will exit 2 (see --strict-exit)'
+	printf '%s\n' "${EXIT_OK}"
+)
+
 # lock_path CONFIG
 # Print the lock directory for CONFIG, under ${TMPDIR:-/tmp}.
 lock_path() (
@@ -553,6 +705,13 @@ lock_path() (
 
 	printf '%s/%s-%s.lock\n' "${TMPDIR:-/tmp}" "${PROGRAM_NAME}" \
 		"${sum%% *}"
+)
+
+# lock_empty PATH
+# Remove the files a run keeps inside the lock directory PATH, so that
+# rmdir can take the directory itself.
+lock_empty() (
+	rm -f -- "${1}/pid" "${1}/tally"
 )
 
 # lock_is_stale PATH
@@ -581,7 +740,7 @@ lock_acquire() (
 		return "${EXIT_LOCKED}"
 	fi
 	warn "reclaiming the stale lock ${1}"
-	rm -f -- "${1}/pid"
+	lock_empty "${1}"
 	lock_reclaim "${1}"
 )
 
@@ -601,7 +760,7 @@ lock_release() (
 	if [ -z "${1}" ]; then
 		return 0
 	fi
-	rm -f -- "${1}/pid"
+	lock_empty "${1}"
 	rmdir -- "${1}" 2>/dev/null
 	return 0
 )
@@ -625,6 +784,12 @@ set_option() {
 		;;
 	--dry-run)
 		DRY_RUN=yes
+		;;
+	--quiet)
+		QUIET=yes
+		;;
+	--strict-exit)
+		STRICT_EXIT=yes
 		;;
 	--verbose | -v)
 		VERBOSE=yes
@@ -653,7 +818,7 @@ parse_args() {
 			set_option "${1}" "${2:-}"
 			shift 2
 			;;
-		--dry-run | --verbose | -v)
+		--dry-run | --verbose | -v | --quiet | --strict-exit)
 			set_option "${1}" ''
 			shift
 			;;
@@ -674,6 +839,10 @@ main() {
 		return 0
 	fi
 	parse_args "$@"
+	START_TIME="$(date +%s 2>/dev/null)"
+	if [ -z "${START_TIME}" ]; then
+		START_TIME=0
+	fi
 	SCRIPT_DIR="$(script_directory)"
 	config_file="$(resolve_config "${CONFIG_FILE}")"
 	if [ -z "${config_file}" ]; then
@@ -692,9 +861,13 @@ main() {
 		die "${EXIT_LOCKED}" "another run holds ${LOCK_PATH}"
 	fi
 	trap 'lock_release "${LOCK_PATH}"' EXIT HUP INT TERM
+	TALLY_FILE="${LOCK_PATH}/tally"
 	run_sections
+	failed="$(tally_count failed)"
+	log_summary
+	code="$(exit_code "${failed}")"
 	lock_release "${LOCK_PATH}"
-	return "${EXIT_OK}"
+	return "${code}"
 }
 
 main "$@"

@@ -5,6 +5,31 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - unreleased
+
+### Added
+
+- A summary line at the end of every run:
+  `updated=N unchanged=N skipped=N failed=N duration=Ns`. Under
+  `log_format = JSON` it is its own record, `"type":"SUMMARY"`, with
+  integer fields. `updated` and `unchanged` are told apart by a
+  checksum of the repository's refs taken before and after the
+  operation, so the count means the same thing for every mode.
+- `--quiet`, which keeps everything but `ERROR` off stdout. A
+  `--log-file` still receives every line, including the summary.
+- `--strict-exit` and `exit_on_failure = yes` in `[SETTINGS]`, which
+  make a failed repository exit `2`. That becomes the default in
+  3.0.0; until then a run that fails without the opt-in prints one
+  `WARN` on stderr saying so, which is the deprecation path section
+  2.2 of CLAUDE.md asks for.
+
+### Fixed
+
+- The lock directory is emptied before it is removed. It now holds the
+  run's tally as well as its pid, and `rmdir` refuses a directory that
+  still has a file in it, so without this a second run would have
+  found the lock of the first one and exited `3` forever.
+
 ## [2.1.0] - 2026-10-14
 
 ### Added
@@ -96,6 +121,7 @@ this project adheres to
 - TXT and JSON Lines log formats, selected by `log_format` in
   `[SETTINGS]`.
 
-[2.1.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.0.0...HEAD
+[2.2.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/releases/tag/v1.0.0

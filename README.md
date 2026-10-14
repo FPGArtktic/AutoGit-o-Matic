@@ -72,6 +72,8 @@ Run the script with:
 - `--config FILE` - Path to the configuration file (default: autogit-o-matic.ini)
 - `--dry-run` - Simulate operations without actually executing Git commands
 - `--verbose, -v` - Display more detailed information about operations
+- `--quiet` - Print only errors on stdout; a log file, if any, still gets every line
+- `--strict-exit` - Exit `2` when a repository fails (the default from 3.0.0)
 - `--log-file FILE` - Write logs to the specified file as well as to stdout
 - `--version` - Print the version and exit
 - `--help` - Display help message and exit
@@ -82,11 +84,34 @@ Run the script with:
 |------|----------------------------------------------|
 | `0`  | the run finished                             |
 | `1`  | a usage or configuration error               |
+| `2`  | at least one repository failed               |
 | `3`  | another run holds the lock for this config   |
 
-A repository that fails is reported as an `ERROR` log line; it does not yet
-change the exit code. That arrives together with the summary line
-(roadmap item 3).
+Code `2` is **opt-in** until 3.0.0: pass `--strict-exit`, or set
+`exit_on_failure = yes` in `[SETTINGS]`. Without it a failed repository is
+reported as an `ERROR` line, the run still exits `0`, and one `WARN` on
+stderr says the default is about to change.
+
+### Summary line
+
+Every run ends with one line counting what it did:
+
+```
+[2026-10-14 18:05:39] SUMMARY: updated=2 unchanged=1 skipped=1 failed=1 duration=4s
+```
+
+`updated` means a repository's refs changed, `unchanged` that the operation
+succeeded and changed nothing, `skipped` that it was deliberately left alone
+(a dirty work tree, a bare repository, a branch checked out elsewhere), and
+`failed` that git or the configuration was at fault. Under `log_format = JSON`
+the same line is its own record, with integer fields:
+
+```json
+{"timestamp":"2026-10-14 18:05:39","type":"SUMMARY","updated":2,"unchanged":1,"skipped":1,"failed":1,"duration":4}
+```
+
+`--quiet` suppresses the summary along with everything else that is not an
+error; a `--log-file` still receives it.
 
 ### Example
 
@@ -179,7 +204,7 @@ You can specify either individual repositories or parent directories containing 
 
 | section          | effect                                                                    |
 |------------------|---------------------------------------------------------------------------|
-| `[SETTINGS]`     | `log_format = TXT` or `JSON`. An inline `# comment` after the value is ignored. |
+| `[SETTINGS]`     | `log_format = TXT` or `JSON`, and `exit_on_failure = yes` to opt into exit code `2`. An inline `# comment` after the value is ignored. |
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
 | `[SILENT_UPDATE]`| `git fetch`, then `git branch -f` for every branch that tracks a remote, is behind it, and is not checked out in the repository or in any of its worktrees. Nothing is merged and no work tree is touched. A bare repository is skipped. |

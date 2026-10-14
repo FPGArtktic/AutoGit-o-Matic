@@ -38,7 +38,7 @@ write_section_config() {
 @test "log_format = JSON makes every line validate with jq" {
 	write_section_config JSON
 
-	run_tool --config config.ini --dry-run
+	run_tool_stdout --config config.ini --dry-run
 
 	[ "$status" -eq 0 ]
 	[ -n "$output" ]
@@ -105,7 +105,7 @@ write_section_config() {
 
 	[ "$status" -eq 0 ]
 	printf '%s\n' "$output" | jq -e . > /dev/null
-	[ "$(printf '%s\n' "$output" | jq -r .path)" = "$quoted" ]
+	[ "$(printf '%s\n' "$output" | head -n 1 | jq -r .path)" = "$quoted" ]
 }
 
 @test "a backslash in a path stays valid JSON" {
@@ -117,7 +117,7 @@ write_section_config() {
 
 	[ "$status" -eq 0 ]
 	printf '%s\n' "$output" | jq -e . > /dev/null
-	[ "$(printf '%s\n' "$output" | jq -r .path)" = "$slashed" ]
+	[ "$(printf '%s\n' "$output" | head -n 1 | jq -r .path)" = "$slashed" ]
 }
 
 @test "git output containing a quote stays valid JSON" {
@@ -126,16 +126,101 @@ write_section_config() {
 	printf '[SETTINGS]\nlog_format = JSON\n\n[FETCH]\npath = %s\n' \
 		"$CLONE" > config.ini
 
-	run_tool --config config.ini
+	run_tool_stdout --config config.ini
 
 	printf '%s\n' "$output" | jq -e . > /dev/null
-	[[ "$(printf '%s\n' "$output" | jq -r .message)" == *'go"ne'* ]]
+	[[ "$(printf '%s\n' "$output" | head -n 1 | jq -r .message)" == *'go"ne'* ]]
 }
 
 @test "every run ends with one summary line" {
-	skip 'the summary line is not implemented yet (CLAUDE.md §3.5)'
+	printf '[PULL]\npath = %s\n' "$CLONE" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" | tail -n 1 | grep -Eq \
+		'^\[.*\] SUMMARY: updated=0 unchanged=1 skipped=0 failed=0 duration=[0-9]+s$'
+	[ "$(printf '%s\n' "$output" | grep -c 'SUMMARY:')" -eq 1 ]
 }
 
-@test "a failed repository makes the run exit 2" {
-	skip 'the exit-code contract is not implemented yet (CLAUDE.md §3.5)'
+@test "the summary counts updated, unchanged, skipped and failed" {
+	local second
+	second="$(make_clone "$REMOTE" other)"
+	advance_remote up 'second'
+	printf 'uncommitted\n' >> "$second/file"
+	mkdir -p barren
+	printf '[PULL]\npath = %s\npath = %s\npath = %s\n' \
+		"$CLONE" "$second" "$BATS_TEST_TMPDIR/barren" > config.ini
+
+	run_tool --config config.ini
+
+	[[ "$output" == *"updated=1 unchanged=0 skipped=1 failed=1"* ]]
+}
+
+@test "the summary in JSON is one record of its own" {
+	local summary
+	write_section_config JSON
+
+	run_tool_stdout --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	summary="$(printf '%s\n' "$output" | tail -n 1)"
+	[ "$(printf '%s' "$summary" | jq -r .type)" = SUMMARY ]
+	[ "$(printf '%s' "$summary" | jq -r .unchanged)" = 1 ]
+	printf '%s' "$summary" | jq -e '.updated | type == "number"' > /dev/null
+	printf '%s' "$summary" | jq -e '.duration | type == "number"' > /dev/null
+}
+
+@test "--quiet prints only errors" {
+	mkdir -p barren
+	printf '[PULL]\npath = %s\npath = %s\n' "$CLONE" \
+		"$BATS_TEST_TMPDIR/barren" > config.ini
+
+	run_tool --config config.ini --dry-run --quiet
+
+	[[ "$output" == *"ERROR:"* ]]
+	[[ "$output" != *"PULL: $CLONE"* ]]
+	[[ "$output" != *"SUMMARY:"* ]]
+}
+
+@test "--quiet still writes every line to the log file" {
+	printf '[PULL]\npath = %s\n' "$CLONE" > config.ini
+
+	run_tool_stdout --config config.ini --dry-run --quiet \
+		--log-file run.log
+
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+	grep -q 'SUMMARY:' run.log
+	grep -q -- "$CLONE" run.log
+}
+
+@test "a failed repository exits 0 and warns about 3.0.0" {
+	mkdir -p barren
+	printf '[PULL]\npath = %s\n' "$BATS_TEST_TMPDIR/barren" > config.ini
+
+	run_tool --config config.ini
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"3.0.0 will exit 2"* ]]
+}
+
+@test "--strict-exit makes a failed repository exit 2" {
+	mkdir -p barren
+	printf '[PULL]\npath = %s\n' "$BATS_TEST_TMPDIR/barren" > config.ini
+
+	run_tool --config config.ini --strict-exit
+
+	[ "$status" -eq 2 ]
+	[[ "$output" != *"3.0.0 will exit 2"* ]]
+}
+
+@test "exit_on_failure = yes opts in without the flag" {
+	mkdir -p barren
+	printf '[SETTINGS]\nexit_on_failure = yes\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/barren" > config.ini
+
+	run_tool --config config.ini
+
+	[ "$status" -eq 2 ]
 }

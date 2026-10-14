@@ -27,6 +27,15 @@ setup() {
 	done
 }
 
+@test "--help documents the flags 2.x added" {
+	run_tool --help
+
+	[ "$status" -eq 0 ]
+	for flag in --quiet --strict-exit --version; do
+		[[ "$output" == *"$flag"* ]]
+	done
+}
+
 @test "an unknown flag exits 1 and names the flag" {
 	run_tool --no-such-flag
 
