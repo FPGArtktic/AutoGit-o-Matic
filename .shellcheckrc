@@ -1,0 +1,6 @@
+# The script is POSIX sh and must be clean at --severity=style
+# --enable=all (CLAUDE.md §2.1). `just lint` passes the same flags
+# explicitly so an editor and the gate agree.
+shell=sh
+severity=style
+enable=all

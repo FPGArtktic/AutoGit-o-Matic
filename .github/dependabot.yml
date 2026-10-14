@@ -1,0 +1,9 @@
+# CLAUDE.md §6: every action stays pinned by SHA and up to date.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
