@@ -87,7 +87,7 @@ Run the script with:
 - `--jobs N` - Work on N repositories at a time (default 1)
 - `--status` - Report what every configured repository looks like and change nothing
 - `--self-check` - Report what this machine can do, then exit
-- `--strict-exit` - Exit `2` when a repository fails (the default from 3.0.0)
+- `--strict-exit` - Exit `2` when a repository fails; the default since 3.0.0, kept for scripts that pass it
 - `--log-file FILE` - Write logs to the specified file as well as to stdout
 - `--version` - Print the version and exit
 - `--help` - Display help message and exit
@@ -101,10 +101,10 @@ Run the script with:
 | `2`  | at least one repository failed               |
 | `3`  | another run holds the lock for this config   |
 
-Code `2` is **opt-in** until 3.0.0: pass `--strict-exit`, or set
-`exit_on_failure = yes` in `[SETTINGS]`. Without it a failed repository is
-reported as an `ERROR` line, the run still exits `0`, and one `WARN` on
-stderr says the default is about to change.
+Code `2` is the default since 3.0.0, so a cron entry or a monitoring check
+notices a repository that failed. To go back to a run that always exits `0`,
+set `exit_on_failure = no` in `[SETTINGS]`. `--strict-exit` still exists and
+still means exit `2`; it is simply what happens anyway.
 
 ### Summary line
 
@@ -222,14 +222,17 @@ You can specify either individual repositories or parent directories containing 
 - Paths containing a tab or a newline are **not supported**: the log and the
   internal record streams are line-oriented with tab-separated fields.
 - A trailing `/` is accepted and ignored.
-- Discovery looks at the path itself and one level below it. A repository two
-  levels down is not found.
+- Discovery looks at the path itself and **five** levels below it, and
+  **stops at a repository**: a directory that is a repository is used and
+  never entered, so a submodule or a repository nested inside a work tree is
+  never reported separately. `max_depth = 1` restores the single level that
+  1.0.0 scanned.
 
 ### What each section does
 
 | section          | effect                                                                    |
 |------------------|---------------------------------------------------------------------------|
-| `[SETTINGS]`     | `log_format = TXT` or `JSON`, `exit_on_failure = yes` to opt into exit code `2`, `summary = no` to drop the summary line. An inline `# comment` after the value is ignored. |
+| `[SETTINGS]`     | `log_format = TXT` or `JSON`, `exit_on_failure = no` to keep exiting `0` when a repository fails, `summary = no` to drop the summary line. An inline `# comment` after the value is ignored. |
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
 | `[DEFAULTS]`     | Option values every repository inherits: `exclude`, `max_depth`, `ssh_key`, `timeout`, `mirror_dir`, `fsck`, `verify_tags`. |
@@ -254,7 +257,7 @@ timeout = 120
 | key         | effect                                                                  |
 |-------------|-------------------------------------------------------------------------|
 | `exclude`   | Comma-separated globs; a discovered repository whose path matches one is left alone. |
-| `max_depth` | How far below a configured path discovery looks. `0` is the path itself, `1` (the default) one level down. |
+| `max_depth` | How far below a configured path discovery looks. `0` is the path itself, `1` one level down, `5` the default. Descent stops at a repository whatever the depth. |
 | `ssh_key`   | Becomes `GIT_SSH_COMMAND=ssh -i <key> -o IdentitiesOnly=yes` for that repository's git calls. |
 | `timeout`   | Seconds one git call may take, when `timeout(1)` is installed. Default 300. |
 | `mirror_dir`| Where `[MIRROR]` keeps its mirrors. Required by that section; without it every mirror is skipped. |
@@ -437,12 +440,13 @@ off switch.
 | `2.3.0` | yes                  | nothing: added `[MIRROR]` |
 | `2.4.0` | yes                  | nothing: added `[BUNDLE]`, `on_change`, `--status`, `--self-check` |
 | `2.5.0` | yes                  | nothing: added `summary = no` |
-| `3.0.0` | **planned break**    | a failed repository will exit `2` instead of `0`, and discovery will descend five levels instead of one. Both are available today, and only when asked for: `--strict-exit` or `exit_on_failure = yes`, and `max_depth = 5` |
+| `3.0.0` | **no**               | a failed repository exits `2` instead of `0`; discovery descends five levels instead of one. Both are switchable: `exit_on_failure = no` and `max_depth = 1` give you 2.x behaviour on 3.x |
 
-So: **`2.0.0` is the only break so far, and the next one will be `3.0.0`.**
-Nothing between them changes behaviour you did not ask for. When `3.0.0`
-does arrive, `2.5.0` stays exactly where it is — clone the tag, or take the
-script from its release, and nothing has moved.
+So: **`2.0.0` and `3.0.0` are the breaks.** Everything else is additive.
+Both of 3.0.0's changes have a switch, so a configuration file can keep the
+old behaviour, and `2.5.0` stays exactly where it is if you would rather not
+move at all — clone the tag, or take the script from its release, and
+nothing has shifted under you.
 
 [CHANGELOG.md](CHANGELOG.md) says what every release changed, in detail, and
 marks the breaking parts.

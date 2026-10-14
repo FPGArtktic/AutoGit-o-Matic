@@ -71,6 +71,11 @@ setup() {
 	[[ "$output" == *"bare=false"* ]]
 }
 
-@test "a failed repository makes the run exit 2" {
-	skip 'the exit-code contract is not implemented yet (CLAUDE.md §3.5)'
+@test "a failed fetch makes the run exit 2" {
+	git -C "$CLONE" remote set-url origin "$BATS_TEST_TMPDIR/gone.git"
+
+	run_tool --config config.ini
+
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"ERROR:"* ]]
 }

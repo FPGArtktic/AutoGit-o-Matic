@@ -5,6 +5,29 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-10-14
+
+Two defaults change. Both were reachable on request throughout 2.x, and
+both can be switched back from a configuration file, so a 2.x setup
+keeps working on 3.0.0 by saying what it wants.
+
+### Changed
+
+- **A failed repository exits `2`.** Until now the run reported the
+  failure as an `ERROR` line and still exited `0`, which meant a cron
+  entry or a monitoring check could not see it. `exit_on_failure = no`
+  in `[SETTINGS]` brings back exiting `0` regardless.
+  `--strict-exit` still means exit `2`; it is now what happens anyway,
+  and the `WARN` that announced this change is gone.
+- **Discovery descends five levels, not one.** A configured path is
+  searched to a depth of five, so a directory holding
+  `group/project/repo` finds the repository without naming every
+  parent. Descent still stops at a repository: a directory that is one
+  is used and never entered, so a submodule or a repository nested in
+  a work tree is not reported separately. `max_depth = 1` restores the
+  single level 1.0.0 scanned, and `max_depth` has always been able to
+  set any depth.
+
 ## [2.5.0] - 2026-10-14
 
 ### Added
@@ -196,7 +219,8 @@ this project adheres to
 - TXT and JSON Lines log formats, selected by `log_format` in
   `[SETTINGS]`.
 
-[2.5.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.4.0...HEAD
+[3.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.1.0...v2.2.0

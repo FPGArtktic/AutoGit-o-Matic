@@ -228,14 +228,36 @@ write_section_config() {
 	grep -q -- "$CLONE" run.log
 }
 
-@test "a failed repository exits 0 and warns about 3.0.0" {
+@test "a failed repository exits 2" {
 	mkdir -p barren
 	printf '[PULL]\npath = %s\n' "$BATS_TEST_TMPDIR/barren" > config.ini
 
 	run_tool --config config.ini
 
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"ERROR:"* ]]
+	[[ "$output" == *"failed=1"* ]]
+}
+
+@test "exit_on_failure = no brings back exiting 0 on a failure" {
+	mkdir -p barren
+	printf '[SETTINGS]\nexit_on_failure = no\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/barren" > config.ini
+
+	run_tool --config config.ini
+
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"3.0.0 will exit 2"* ]]
+	[[ "$output" == *"ERROR:"* ]]
+	[[ "$output" == *"failed=1"* ]]
+}
+
+@test "a clean run still exits 0" {
+	printf '[PULL]\npath = %s\n' "$CLONE" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"failed=0"* ]]
 }
 
 @test "--strict-exit makes a failed repository exit 2" {

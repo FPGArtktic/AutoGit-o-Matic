@@ -28,10 +28,10 @@ test shell="sh":
 # The four shells the script must pass under (CLAUDE.md §2.1).
 test-all: (test "sh") (test "dash") (test "bash --posix") (test "busybox sh")
 
-# Line coverage of the script: floor 80 %, target 85 % (CLAUDE.md §5).
 # kcov cannot follow bats 1.13 or newer - the same suite reports about
 # half the lines - so pass an older one to measure for real:
 #   just coverage ~/tools/bats-1.12/bin/bats
+# Line coverage of the script: floor 80 %, target 85 % (CLAUDE.md §5).
 coverage bats="bats":
 	AUTOGIT_SH=bash kcov --include-path="$PWD/autogit-o-matic.sh" \
 		--exclude-region=kcov-exclude-start:kcov-exclude-stop \
@@ -39,5 +39,7 @@ coverage bats="bats":
 	jq -r '"line coverage: \(.percent_covered) % (floor 80, target 85)"' coverage/bats/coverage.json
 	jq -e '(.percent_covered | tonumber) >= 80' coverage/bats/coverage.json >/dev/null
 
-# The pre-commit gate (CLAUDE.md §10).
-check: lint test-all coverage
+# Takes the bats to measure coverage with, as `coverage` does:
+#   just check ~/tools/bats-1.12/bin/bats
+# The pre-commit gate: lint, four shells, coverage (CLAUDE.md §10).
+check bats="bats": lint test-all (coverage bats)

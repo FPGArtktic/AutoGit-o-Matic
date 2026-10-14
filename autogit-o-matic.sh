@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=2.5.0
+VERSION=3.0.0
 
 set -u
 
@@ -31,7 +31,9 @@ readonly OUTPUT_LIMIT=150
 readonly GIT_TIMEOUT=300
 # How deep submodule mirroring follows, so a cycle cannot spin forever.
 readonly MIRROR_MAX_DEPTH=5
-# Exit codes (CLAUDE.md 3.5). EXIT_FAILED is opt-in until 3.0.0.
+# How far below a configured path discovery looks, unless max_depth says.
+readonly DISCOVERY_DEPTH=5
+# Exit codes (CLAUDE.md 3.5).
 readonly EXIT_OK=0
 readonly EXIT_USAGE=1
 readonly EXIT_FAILED=2
@@ -43,7 +45,7 @@ LOG_FORMAT=TXT
 LOG_FILE=
 VERBOSE=no
 QUIET=no
-STRICT_EXIT=no
+STRICT_EXIT=yes
 STATUS_ONLY=no
 SUMMARY=yes
 JOBS=1
@@ -68,7 +70,7 @@ usage() (
 		  --verbose, -v    Display more detailed information about operations
 		  --quiet          Print only errors on stdout; a log file still gets everything
 		  --jobs N         Work on N repositories at a time (default 1)
-		  --strict-exit    Exit 2 when a repository fails (the default from 3.0.0)
+		  --strict-exit    Exit 2 when a repository fails (the default; kept for scripts)
 		  --status         Report what every configured repository looks like, change nothing
 		  --self-check     Report what this machine can do, then exit
 		  --log-file FILE  Write logs to the specified file as well as to stdout
@@ -517,13 +519,15 @@ git_bundle_create() (
 )
 
 # discovery_depth
-# Print how deep discovery may go: max_depth in [DEFAULTS], else 1.
+# Print how deep discovery may go: max_depth in [DEFAULTS], else the
+# default of five levels. Descent stops at a repository either way, so
+# nothing inside a work tree is ever reported separately.
 discovery_depth() (
 	depth="$(section_values DEFAULTS max_depth | head -n 1)"
 
 	case "${depth}" in
 	'' | *[!0-9]*)
-		printf '1\n'
+		printf '%s\n' "${DISCOVERY_DEPTH}"
 		;;
 	*)
 		printf '%s\n' "${depth}"
@@ -1314,15 +1318,18 @@ set_log_format() {
 }
 
 # set_exit_policy
-# Turn on the strict exit code when [SETTINGS] asks for it.
+# Let [SETTINGS] ask for the pre-3.0.0 behaviour, where a failed
+# repository still left the run exiting 0.
 # Mutates global state on purpose (CLAUDE.md 3.2).
 set_exit_policy() {
-	case "$(setting_value exit_on_failure)" in
-	yes | YES | Yes | true | 1)
-		STRICT_EXIT=yes
+	value="$(setting_value exit_on_failure)"
+
+	case "${value}" in
+	no | NO | No | false | 0)
+		STRICT_EXIT=no
 		;;
 	*)
-		# Anything else leaves 2.x exiting 0 on a failed repository.
+		# Anything else, the empty string included, exits 2.
 		;;
 	esac
 }
@@ -1354,19 +1361,15 @@ apply_settings() {
 }
 
 # exit_code FAILED
-# Print the status this run leaves with. Warns once while the strict
-# code is still opt-in (CLAUDE.md 2.2).
+# Print the status this run leaves with (CLAUDE.md 3.5). A failed
+# repository exits 2 since 3.0.0; exit_on_failure = no asks for the
+# older behaviour of exiting 0 regardless.
 exit_code() (
-	if [ "${1}" -eq 0 ]; then
+	if [ "${1}" -eq 0 ] || [ "${STRICT_EXIT}" = no ]; then
 		printf '%s\n' "${EXIT_OK}"
 		return 0
 	fi
-	if [ "${STRICT_EXIT}" = yes ]; then
-		printf '%s\n' "${EXIT_FAILED}"
-		return 0
-	fi
-	warn 'a repository failed; 3.0.0 will exit 2 (see --strict-exit)'
-	printf '%s\n' "${EXIT_OK}"
+	printf '%s\n' "${EXIT_FAILED}"
 )
 
 # lock_path CONFIG

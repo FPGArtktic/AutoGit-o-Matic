@@ -93,7 +93,7 @@ pull_lines() {
 	[[ "$output" != *"No Git repositories found"* ]]
 }
 
-@test "discovery goes one level down, no further" {
+@test "discovery descends more than one level by default" {
 	local remote
 	remote="$(make_remote up)"
 	mkdir -p deep/nested
@@ -102,7 +102,49 @@ pull_lines() {
 
 	run_tool --config config.ini --dry-run
 
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"PULL: $BATS_TEST_TMPDIR/deep/nested/repo"* ]]
+}
+
+@test "discovery stops after five levels" {
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p one/two/three/four/five/six
+	git clone -q -- "$remote" one/two/three/four/five/six/repo
+	pull_config "$BATS_TEST_TMPDIR/one"
+
+	run_tool --config config.ini --dry-run
+
 	[[ "$output" == *"No Git repositories found"* ]]
+}
+
+@test "max_depth = 1 brings back the shallow scan of 1.0.0" {
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p deep/nested
+	git clone -q -- "$remote" deep/nested/repo
+	printf '[DEFAULTS]\nmax_depth = 1\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/deep" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[[ "$output" == *"No Git repositories found"* ]]
+}
+
+@test "descent stops at a repository, so a nested one is not reported" {
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p many
+	git clone -q -- "$remote" many/outer
+	git clone -q -- "$remote" many/outer/vendor
+	pull_config "$BATS_TEST_TMPDIR/many"
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[ "$(pull_lines)" -eq 1 ]
+	[[ "$output" == *"PULL: $BATS_TEST_TMPDIR/many/outer -"* ]]
+	[[ "$output" != *"vendor"* ]]
 }
 
 @test "a repository excluded by a glob is left alone" {

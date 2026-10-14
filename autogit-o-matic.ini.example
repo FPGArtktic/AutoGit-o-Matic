@@ -5,9 +5,9 @@
 # Log format. Available options: TXT, JSON
 log_format = TXT
 
-# Exit 2 when at least one repository fails. This becomes the default
-# in 3.0.0; opting in now silences the warning about that change.
-# exit_on_failure = yes
+# A failed repository exits 2 since 3.0.0. Say no here to go back to a
+# run that always exits 0, the way 2.x did without --strict-exit.
+# exit_on_failure = no
 
 # Every run ends with one SUMMARY line. It is the only line 1.0.0 did
 # not print, so say no here if something parses this log line by line.
@@ -16,7 +16,8 @@ log_format = TXT
 # [DEFAULTS]
 # Values every repository in the run inherits.
 # exclude   - comma-separated globs; a matching repository is skipped
-# max_depth - how far below a configured path to look (0 = the path, 1 = default)
+# max_depth - how far below a configured path to look (0 = the path
+#             itself, 5 = default; descent always stops at a repository)
 # ssh_key   - becomes GIT_SSH_COMMAND for that repository's git calls
 # timeout   - seconds one git call may take (default 300)
 # A repository can override ssh_key and timeout for itself with
@@ -25,7 +26,7 @@ log_format = TXT
 # fsck        - yes runs git fsck --connectivity-only after a mirror update
 # verify_tags - yes verifies the signed tags of a mirror after an update
 # exclude = */vendor,*-archive
-# max_depth = 2
+# max_depth = 1
 # ssh_key = /home/user/.ssh/deploy
 # timeout = 120
 # bundle_dir  - where [BUNDLE] writes bundles and their SHA256SUMS
