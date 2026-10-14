@@ -399,6 +399,54 @@ without interleaving. The run counts (`updated`, `failed`, …) are kept in
 a file inside the lock directory for the same reason: a count in a shell
 variable would not survive the subshell each job runs in.
 
+## Versions
+
+Every release is tagged and published, with the script, the example
+configuration and a `SHA256SUMS` on the
+[releases page](https://github.com/FPGArtktic/AutoGit-o-Matic/releases).
+`autogit-o-matic.sh --version` prints the version a copy came from.
+
+That is also the answer to an upgrade you do not want. Nothing is deleted:
+if a release changes something you relied on, the previous one stays exactly
+where it was.
+
+```bash
+# the whole repository at an older release
+git clone --branch v2.5.0 https://github.com/FPGArtktic/AutoGit-o-Matic.git
+
+# or go back in a clone you already have
+git -C AutoGit-o-Matic checkout v2.5.0
+
+# or just the script, from the release assets
+curl -LO https://github.com/FPGArtktic/AutoGit-o-Matic/releases/download/v2.5.0/autogit-o-matic.sh
+```
+
+### Which release breaks what
+
+A release that changes what an existing configuration or cron entry does
+gets a **major** number. Inside a major line, upgrading is safe: every
+feature since 2.0.0 is either invisible until you configure it or has an
+off switch.
+
+| release | safe to upgrade into? | what it did to an existing setup |
+|---------|----------------------|----------------------------------|
+| `1.0.0` | —                    | the original Bash script |
+| `2.0.0` | **no**               | `[PULL]` became `git pull --ff-only`, so a diverged branch is reported instead of merged; a dirty work tree or a bare repository in `[PULL]` is skipped; errors moved to stderr; a run that finds the lock held exits `3` |
+| `2.1.0` | yes                  | nothing: added `[SILENT_UPDATE]` |
+| `2.2.0` | yes, with one note   | added flags, `[DEFAULTS]`, and the `SUMMARY` line — one line on stdout that 1.0.0 did not print. `2.5.0` added `summary = no` to turn it off |
+| `2.3.0` | yes                  | nothing: added `[MIRROR]` |
+| `2.4.0` | yes                  | nothing: added `[BUNDLE]`, `on_change`, `--status`, `--self-check` |
+| `2.5.0` | yes                  | nothing: added `summary = no` |
+| `3.0.0` | **planned break**    | a failed repository will exit `2` instead of `0`, and discovery will descend five levels instead of one. Both are available today, and only when asked for: `--strict-exit` or `exit_on_failure = yes`, and `max_depth = 5` |
+
+So: **`2.0.0` is the only break so far, and the next one will be `3.0.0`.**
+Nothing between them changes behaviour you did not ask for. When `3.0.0`
+does arrive, `2.5.0` stays exactly where it is — clone the tag, or take the
+script from its release, and nothing has moved.
+
+[CHANGELOG.md](CHANGELOG.md) says what every release changed, in detail, and
+marks the breaking parts.
+
 ## Development
 
 Development tasks run through [`just`](https://github.com/casey/just):
@@ -415,6 +463,16 @@ just check       # all of the above; the pre-commit gate
 The development dependencies are `shellcheck`, `checkbashisms` (Debian's
 `devscripts`), `shfmt`, `bats-core`, `jq`, `kcov`, `dash` and `busybox`. None
 of them is needed to run the script.
+
+One wrinkle worth knowing: `kcov` cannot follow `bats` 1.13 or newer, which
+manipulates the same `set -x` and DEBUG traps that kcov's collectors use.
+The suite passes either way, but the coverage number comes out roughly half
+of the truth. CI runs Ubuntu's bats and measures correctly; locally, point
+the recipe at an older bats:
+
+```bash
+just coverage ~/tools/bats-1.12/bin/bats
+```
 
 ## Scheduling
 

@@ -29,10 +29,13 @@ test shell="sh":
 test-all: (test "sh") (test "dash") (test "bash --posix") (test "busybox sh")
 
 # Line coverage of the script: floor 80 %, target 85 % (CLAUDE.md §5).
-coverage:
+# kcov cannot follow bats 1.13 or newer - the same suite reports about
+# half the lines - so pass an older one to measure for real:
+#   just coverage ~/tools/bats-1.12/bin/bats
+coverage bats="bats":
 	AUTOGIT_SH=bash kcov --include-path="$PWD/autogit-o-matic.sh" \
 		--exclude-region=kcov-exclude-start:kcov-exclude-stop \
-		--clean "$PWD/coverage" bats tests
+		--clean "$PWD/coverage" {{bats}} tests
 	jq -r '"line coverage: \(.percent_covered) % (floor 80, target 85)"' coverage/bats/coverage.json
 	jq -e '(.percent_covered | tonumber) >= 80' coverage/bats/coverage.json >/dev/null
 
