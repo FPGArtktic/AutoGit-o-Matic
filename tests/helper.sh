@@ -4,6 +4,9 @@
 # by $AUTOGIT_SH (default sh), never by its own shebang (CLAUDE.md §5).
 # Nothing here touches the network or the developer's git config.
 
+# run_tool_stdout passes a flag to run, which bats 1.5 introduced.
+bats_require_minimum_version 1.5.0
+
 AUTOGIT_SH="${AUTOGIT_SH:-sh}"
 AUTOGIT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # $AUTOGIT may point elsewhere, which is how a regression test gets run

@@ -5,7 +5,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.0] - unreleased
+## [2.2.0] - 2026-10-14
 
 ### Added
 
@@ -22,6 +22,20 @@ this project adheres to
   3.0.0; until then a run that fails without the opt-in prints one
   `WARN` on stderr saying so, which is the deprecation path section
   2.2 of CLAUDE.md asks for.
+
+- `[DEFAULTS]`, holding `exclude`, `max_depth`, `ssh_key` and
+  `timeout` for every repository in the run. A repository overrides
+  `ssh_key` and `timeout` for itself through `git config
+  autogit.ssh-key` and `autogit.timeout`; git forbids an underscore in
+  a configuration key, so the INI spelling keeps the underscore and
+  the repository's own configuration uses a dash.
+- `exclude` globs, applied to every discovered path, and `max_depth`,
+  which decides how far below a configured path discovery looks. The
+  default stays one level, which is what 1.0.0 did.
+- `--jobs N`, which works on N repositories at a time in batches. The
+  repository loop is fed by a here-document rather than a pipeline,
+  because a pipeline puts the jobs in a subshell that `wait` cannot
+  see.
 
 ### Fixed
 

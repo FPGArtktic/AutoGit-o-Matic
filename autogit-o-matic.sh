@@ -42,6 +42,7 @@ LOG_FILE=
 VERBOSE=no
 QUIET=no
 STRICT_EXIT=no
+JOBS=1
 START_TIME=0
 TALLY_FILE=
 SCRIPT_DIR=.
@@ -61,6 +62,7 @@ usage() (
 		  --dry-run        Simulate operations without actually executing Git commands
 		  --verbose, -v    Display more detailed information about operations
 		  --quiet          Print only errors on stdout; a log file still gets everything
+		  --jobs N         Work on N repositories at a time (default 1)
 		  --strict-exit    Exit 2 when a repository fails (the default from 3.0.0)
 		  --log-file FILE  Write logs to the specified file as well as to stdout
 		  --version        Print the version and exit
@@ -270,6 +272,63 @@ verbose() (
 	printf '[%s] %s\n' "${1}" "${2}"
 )
 
+# git_config_value REPO KEY
+# Print autogit.KEY from REPO's own configuration; nothing if unset.
+# A git config key cannot hold an underscore, so ssh_key reads as
+# autogit.ssh-key there while the INI keeps one spelling.
+git_config_value() (
+	name="$(printf '%s' "${2}" | tr '_' '-')"
+
+	git -C "${1}" config --get "autogit.${name}" 2>/dev/null
+)
+
+# option_value KEY REPO
+# Print KEY for REPO: the repository's own autogit.KEY wins over
+# [DEFAULTS], which wins over nothing at all (CLAUDE.md 3.3).
+option_value() (
+	value="$(git_config_value "${2}" "${1}")"
+
+	if [ -n "${value}" ]; then
+		printf '%s\n' "${value}"
+		return 0
+	fi
+	section_values DEFAULTS "${1}" | head -n 1
+)
+
+# match_any PATH GLOBS
+# Returns 0 when PATH matches one of the comma-separated GLOBS.
+match_any() (
+	rest="${2}"
+
+	while [ -n "${rest}" ]; do
+		glob="${rest%%,*}"
+		rest="${rest#"${glob}"}"
+		rest="${rest#,}"
+		# Unquoted on purpose: ${glob} is a pattern, not a literal.
+		# shellcheck disable=SC2254
+		case "${1}" in
+		${glob})
+			return 0
+			;;
+		*)
+			# No match; the next glob gets its turn.
+			;;
+		esac
+	done
+	return 1
+)
+
+# excluded PATH
+# Returns 0 when an exclude glob in [DEFAULTS] covers PATH.
+excluded() (
+	globs="$(section_values DEFAULTS exclude | head -n 1)"
+
+	if [ -z "${globs}" ]; then
+		return 1
+	fi
+	match_any "${1}" "${globs}"
+)
+
 # git_is_repo PATH
 # Returns 0 when PATH is a work tree, a linked worktree, or bare.
 # --resolve-git-dir takes its path as the option value, so no -- here.
@@ -296,16 +355,48 @@ git_dirty() (
 	[ -n "${changes}" ]
 )
 
+# repo_ssh_command REPO
+# Print the GIT_SSH_COMMAND an ssh_key asks for; nothing without one.
+repo_ssh_command() (
+	key="$(option_value ssh_key "${1}")"
+
+	if [ -z "${key}" ]; then
+		return 0
+	fi
+	printf 'ssh -i %s -o IdentitiesOnly=yes\n' "${key}"
+)
+
+# repo_timeout REPO
+# Print how many seconds one git call may take for REPO.
+repo_timeout() (
+	seconds="$(option_value timeout "${1}")"
+
+	case "${seconds}" in
+	'' | *[!0-9]*)
+		printf '%s\n' "${GIT_TIMEOUT}"
+		;;
+	*)
+		printf '%s\n' "${seconds}"
+		;;
+	esac
+)
+
 # git_run PATH ARGS...
-# Run git ARGS inside PATH, under timeout(1) when it exists.
-# Prints git's output and stderr; returns git's status.
+# Run git ARGS inside PATH, under timeout(1) when it exists, with the
+# ssh key and the timeout that PATH asks for. Returns git's status.
 git_run() (
 	path="${1}"
 	shift
+	ssh_command="$(repo_ssh_command "${path}")"
+	seconds="$(repo_timeout "${path}")"
 
+	if [ -n "${ssh_command}" ]; then
+		GIT_SSH_COMMAND="${ssh_command}"
+		export GIT_SSH_COMMAND
+	fi
 	cd -- "${path}" || return 1
 	if [ -n "${TIMEOUT_CMD}" ]; then
-		"${TIMEOUT_CMD}" "${GIT_TIMEOUT}" git "$@" 2>&1
+		"${TIMEOUT_CMD}" "${seconds}" git "$@" 2>&1
 		return "$?"
 	fi
 	git "$@" 2>&1
@@ -364,24 +455,58 @@ git_ff_branch() (
 	return 2
 )
 
+# discovery_depth
+# Print how deep discovery may go: max_depth in [DEFAULTS], else 1.
+discovery_depth() (
+	depth="$(section_values DEFAULTS max_depth | head -n 1)"
+
+	case "${depth}" in
+	'' | *[!0-9]*)
+		printf '1\n'
+		;;
+	*)
+		printf '%s\n' "${depth}"
+		;;
+	esac
+)
+
+# emit_repo PATH
+# Print PATH unless an exclude glob covers it.
+emit_repo() (
+	if excluded "${1}"; then
+		return 0
+	fi
+	printf '%s\n' "${1}"
+)
+
+# discover_in DIR DEPTH
+# Print the repositories at DIR, descending while DEPTH is left.
+discover_in() (
+	if git_is_repo "${1}"; then
+		emit_repo "${1}"
+		return 0
+	fi
+	if [ "${2}" -le 0 ]; then
+		return 0
+	fi
+	for entry in "${1}"/*; do
+		if [ -d "${entry}" ]; then
+			discover_in "${entry}" "$((${2} - 1))"
+		fi
+	done
+)
+
 # discover_repos PATH
-# Print every repository at PATH or one level below it, one per line.
-# Work trees, linked worktrees and bare mirrors all come out the same.
+# Print every repository at PATH or below it, one per line. Work trees,
+# linked worktrees and bare mirrors all come out the same.
 discover_repos() (
 	base="${1%/}"
+	depth="$(discovery_depth)"
 
 	if [ -z "${base}" ]; then
 		base=/
 	fi
-	if git_is_repo "${base}"; then
-		printf '%s\n' "${base}"
-		return 0
-	fi
-	for entry in "${base}"/*; do
-		if [ -d "${entry}" ] && git_is_repo "${entry}"; then
-			printf '%s\n' "${entry}"
-		fi
-	done
+	discover_in "${base}" "${depth}"
 )
 
 # mode_verb MODE
@@ -542,8 +667,28 @@ process_repo() (
 	return 2
 )
 
+# run_batch MODE REPOS
+# Run MODE on each of the newline-separated REPOS, ${JOBS} at a time.
+# The loop is fed by a here-document rather than a pipeline, because a
+# pipeline would put the jobs in a subshell that wait(1) cannot see.
+run_batch() (
+	running=0
+
+	while IFS= read -r repo; do
+		process_repo "${1}" "${repo}" &
+		running="$((running + 1))"
+		if [ "${running}" -ge "${JOBS}" ]; then
+			wait
+			running=0
+		fi
+	done <<-EOF
+		${2}
+	EOF
+	wait
+)
+
 # process_repos MODE PATH
-# Run MODE on every repository discovered under PATH.
+# Run MODE on every repository discovered under PATH, ${JOBS} at once.
 process_repos() (
 	verbose INFO "Processing ${1} operation for path: ${2}"
 	repos="$(discover_repos "${2}")"
@@ -553,10 +698,7 @@ process_repos() (
 		tally_add failed
 		return 2
 	fi
-	printf '%s\n' "${repos}" |
-		while IFS= read -r repo; do
-			process_repo "${1}" "${repo}"
-		done
+	run_batch "${1}" "${repos}"
 )
 
 # run_section MODE
@@ -765,6 +907,19 @@ lock_release() (
 	return 0
 )
 
+# is_count VALUE
+# Returns 0 when VALUE is a positive decimal number.
+is_count() (
+	case "${1}" in
+	'' | 0 | *[!0-9]*)
+		return 1
+		;;
+	*)
+		return 0
+		;;
+	esac
+)
+
 # set_option FLAG VALUE
 # Apply FLAG; VALUE belongs to it when the flag takes one.
 # Mutates global state on purpose (CLAUDE.md 3.2).
@@ -781,6 +936,12 @@ set_option() {
 			die "${EXIT_USAGE}" "${1} needs a file"
 		fi
 		LOG_FILE="${2}"
+		;;
+	--jobs)
+		if ! is_count "${2}"; then
+			die "${EXIT_USAGE}" "${1} needs a positive number"
+		fi
+		JOBS="${2}"
 		;;
 	--dry-run)
 		DRY_RUN=yes
@@ -814,7 +975,7 @@ parse_args() {
 			printf '%s\n' "${VERSION}"
 			exit "${EXIT_OK}"
 			;;
-		--config | --log-file)
+		--config | --log-file | --jobs)
 			set_option "${1}" "${2:-}"
 			shift 2
 			;;

@@ -106,10 +106,54 @@ setup() {
 	printf '%s\n' "$output" | jq -e . > /dev/null
 }
 
-@test "[DEFAULTS] overrides a section's settings" {
-	skip '[DEFAULTS] is not implemented yet (CLAUDE.md §5)'
+@test "[DEFAULTS] supplies an option the repository does not set" {
+	run_sourced "INI_STREAM=\"\$(printf 'DEFAULTS\\tssh_key\\t/from/defaults')\"
+		printf 'key=%s\\n' \"\$(option_value ssh_key '$CLONE')\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"key=/from/defaults"* ]]
 }
 
-@test "per-repo git config autogit.* is honoured" {
-	skip 'per-repo config is not implemented yet (CLAUDE.md §5)'
+@test "per-repo autogit.ssh-key beats [DEFAULTS] ssh_key" {
+	git -C "$CLONE" config autogit.ssh-key /from/the/repo
+
+	run_sourced "INI_STREAM=\"\$(printf 'DEFAULTS\\tssh_key\\t/from/defaults')\"
+		printf 'key=%s\\n' \"\$(option_value ssh_key '$CLONE')\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"key=/from/the/repo"* ]]
+}
+
+@test "an ssh_key becomes a GIT_SSH_COMMAND" {
+	git -C "$CLONE" config autogit.ssh-key /keys/deploy
+
+	run_sourced "printf 'cmd=%s\\n' \"\$(repo_ssh_command '$CLONE')\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cmd=ssh -i /keys/deploy -o IdentitiesOnly=yes"* ]]
+}
+
+@test "a repository with no ssh_key leaves the command alone" {
+	run_sourced "printf 'cmd=[%s]\\n' \"\$(repo_ssh_command '$CLONE')\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cmd=[]"* ]]
+}
+
+@test "a per-repo timeout overrides the built-in one" {
+	git -C "$CLONE" config autogit.timeout 7
+
+	run_sourced "printf 'seconds=%s\\n' \"\$(repo_timeout '$CLONE')\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"seconds=7"* ]]
+}
+
+@test "a nonsense timeout falls back to the built-in one" {
+	git -C "$CLONE" config autogit.timeout later
+
+	run_sourced "printf 'seconds=%s\\n' \"\$(repo_timeout '$CLONE')\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"seconds=300"* ]]
 }

@@ -106,9 +106,76 @@ pull_lines() {
 }
 
 @test "a repository excluded by a glob is left alone" {
-	skip 'exclude globs are not implemented yet (CLAUDE.md §5)'
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p many
+	git clone -q -- "$remote" many/keep-me
+	git clone -q -- "$remote" many/skip-me
+	printf '[DEFAULTS]\nexclude = *skip-*\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/many" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"PULL: $BATS_TEST_TMPDIR/many/keep-me"* ]]
+	[[ "$output" != *"skip-me"* ]]
+}
+
+@test "several exclude globs are honoured" {
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p many
+	git clone -q -- "$remote" many/alpha
+	git clone -q -- "$remote" many/beta
+	git clone -q -- "$remote" many/gamma
+	printf '[DEFAULTS]\nexclude = */alpha,*/gamma\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/many" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[ "$(pull_lines)" -eq 1 ]
+	[[ "$output" == *"many/beta"* ]]
 }
 
 @test "max_depth bounds the scan" {
-	skip 'max_depth is not implemented yet (CLAUDE.md §5)'
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p deep/nested
+	git clone -q -- "$remote" deep/nested/repo
+	printf '[DEFAULTS]\nmax_depth = 2\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/deep" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"PULL: $BATS_TEST_TMPDIR/deep/nested/repo"* ]]
+}
+
+@test "max_depth 0 looks at the path and nowhere else" {
+	local remote
+	remote="$(make_remote up)"
+	mkdir -p many
+	git clone -q -- "$remote" many/first
+	printf '[DEFAULTS]\nmax_depth = 0\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/many" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[[ "$output" == *"No Git repositories found"* ]]
+}
+
+@test "an unreadable max_depth falls back to one level" {
+	local remote clone
+	remote="$(make_remote up)"
+	clone="$(make_clone "$remote" work)"
+	mkdir -p many
+	git clone -q -- "$remote" many/first
+	printf '[DEFAULTS]\nmax_depth = soon\n\n[PULL]\npath = %s\n' \
+		"$BATS_TEST_TMPDIR/many" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"many/first"* ]]
 }

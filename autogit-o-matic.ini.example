@@ -9,6 +9,19 @@ log_format = TXT
 # in 3.0.0; opting in now silences the warning about that change.
 # exit_on_failure = yes
 
+# [DEFAULTS]
+# Values every repository in the run inherits.
+# exclude   - comma-separated globs; a matching repository is skipped
+# max_depth - how far below a configured path to look (0 = the path, 1 = default)
+# ssh_key   - becomes GIT_SSH_COMMAND for that repository's git calls
+# timeout   - seconds one git call may take (default 300)
+# A repository can override ssh_key and timeout for itself with
+# 'git config autogit.ssh-key ...' and 'git config autogit.timeout ...'.
+# exclude = */vendor,*-archive
+# max_depth = 2
+# ssh_key = /home/user/.ssh/deploy
+# timeout = 120
+
 [PULL]
 # Paths to repositories you want to update using 'git pull'
 # You can provide a direct path to a repository

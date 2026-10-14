@@ -73,6 +73,7 @@ Run the script with:
 - `--dry-run` - Simulate operations without actually executing Git commands
 - `--verbose, -v` - Display more detailed information about operations
 - `--quiet` - Print only errors on stdout; a log file, if any, still gets every line
+- `--jobs N` - Work on N repositories at a time (default 1)
 - `--strict-exit` - Exit `2` when a repository fails (the default from 3.0.0)
 - `--log-file FILE` - Write logs to the specified file as well as to stdout
 - `--version` - Print the version and exit
@@ -207,9 +208,51 @@ You can specify either individual repositories or parent directories containing 
 | `[SETTINGS]`     | `log_format = TXT` or `JSON`, and `exit_on_failure = yes` to opt into exit code `2`. An inline `# comment` after the value is ignored. |
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
+| `[DEFAULTS]`     | Option values every repository inherits: `exclude`, `max_depth`, `ssh_key`, `timeout`. |
 | `[SILENT_UPDATE]`| `git fetch`, then `git branch -f` for every branch that tracks a remote, is behind it, and is not checked out in the repository or in any of its worktrees. Nothing is merged and no work tree is touched. A bare repository is skipped. |
 
 Unknown sections are ignored, and section names are case insensitive.
+
+### Options a repository can inherit or override
+
+`[DEFAULTS]` holds values that apply to every repository in the run:
+
+```ini
+[DEFAULTS]
+exclude = */vendor,*-archive
+max_depth = 2
+ssh_key = /home/user/.ssh/deploy
+timeout = 120
+```
+
+| key         | effect                                                                  |
+|-------------|-------------------------------------------------------------------------|
+| `exclude`   | Comma-separated globs; a discovered repository whose path matches one is left alone. |
+| `max_depth` | How far below a configured path discovery looks. `0` is the path itself, `1` (the default) one level down. |
+| `ssh_key`   | Becomes `GIT_SSH_COMMAND=ssh -i <key> -o IdentitiesOnly=yes` for that repository's git calls. |
+| `timeout`   | Seconds one git call may take, when `timeout(1)` is installed. Default 300. |
+
+A repository can override `ssh_key` and `timeout` for itself, with git's
+own configuration:
+
+```bash
+git -C /path/to/repo config autogit.ssh-key /home/user/.ssh/other
+git -C /path/to/repo config autogit.timeout 600
+```
+
+A git configuration key cannot contain an underscore, so `ssh_key` in the
+INI file is `autogit.ssh-key` in a repository. `exclude` and `max_depth`
+decide what gets discovered in the first place, so they are read from
+`[DEFAULTS]` only.
+
+### Running several repositories at once
+
+`--jobs N` works on N repositories in parallel, in batches of N. Each log
+line is written with a single `printf`, and a line that short cannot be
+split by the kernel, so parallel jobs share one stdout and one log file
+without interleaving. The run counts (`updated`, `failed`, …) are kept in
+a file inside the lock directory for the same reason: a count in a shell
+variable would not survive the subshell each job runs in.
 
 ## Development
 
