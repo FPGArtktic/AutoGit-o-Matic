@@ -20,6 +20,13 @@ teardown() {
 	fi
 }
 
+@test "releasing an empty lock path is a no-op" {
+	run_sourced 'lock_release ""; printf "released=%s\n" "$?"'
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"released=0"* ]]
+}
+
 @test "a second run exits 3 while a live run holds the lock" {
 	mkdir -p -- "$LOCK"
 	printf '%s\n' "$$" > "$LOCK/pid"

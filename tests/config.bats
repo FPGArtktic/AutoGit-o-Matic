@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# config: the INI shapes 0.1.0 accepted, now read by one awk program.
+# config: the INI shapes 1.0.0 accepted, now read by one awk program.
 # Defect 8: [PULL] and [FETCH] share the parser instead of duplicating it.
 
 load helper.sh
@@ -47,7 +47,7 @@ setup() {
 	[[ "$output" == *"PULL: $CLONE"* ]]
 }
 
-@test "a bare relative line is ignored, as in 0.1.0" {
+@test "a bare relative line is ignored, as in 1.0.0" {
 	printf '[PULL]\nwork\n' > config.ini
 
 	run_tool --config config.ini --dry-run
@@ -107,9 +107,9 @@ setup() {
 }
 
 @test "[DEFAULTS] overrides a section's settings" {
-	skip '[DEFAULTS] arrives with v0.3.0 (CLAUDE.md §5, roadmap 3)'
+	skip '[DEFAULTS] is roadmap item 3 (CLAUDE.md §5)'
 }
 
 @test "per-repo git config autogit.* is honoured" {
-	skip 'per-repo config arrives with v0.3.0 (CLAUDE.md §5, roadmap 3)'
+	skip 'per-repo config is roadmap item 3 (CLAUDE.md §5)'
 }

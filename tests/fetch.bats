@@ -57,12 +57,20 @@ setup() {
 }
 
 @test "git never gets a chance to prompt for credentials" {
-	run_sourced 'printf "%s\n" "${GIT_TERMINAL_PROMPT}"'
+	run_sourced 'printf "prompt=%s\n" "${GIT_TERMINAL_PROMPT}"'
 
 	[ "$status" -eq 0 ]
-	[ "$output" = 0 ]
+	[[ "$output" == *"prompt=0"* ]]
+}
+
+@test "a git call still runs when timeout(1) is missing" {
+	run_sourced "printf 'bare=%s\\n' \"\$(TIMEOUT_CMD= git_run '$CLONE' \
+		rev-parse --is-bare-repository)\""
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"bare=false"* ]]
 }
 
 @test "a failed repository makes the run exit 2" {
-	skip 'exit-code contract arrives with v0.3.0 (CLAUDE.md §3.5, roadmap 3)'
+	skip 'the exit-code contract is roadmap item 3 (CLAUDE.md §3.5)'
 }

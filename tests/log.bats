@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# log: the line formats v0.1.0 shipped, which CLAUDE.md §2.2 freezes.
+# log: the line formats v1.0.0 shipped, which CLAUDE.md §2.2 freezes.
 # JSON lines must validate with `jq -e .` (CLAUDE.md §3.5).
 
 load helper.sh
@@ -88,6 +88,14 @@ write_section_config() {
 	[[ "$output" == *"$BATS_TEST_TMPDIR/barren"* ]]
 }
 
+@test "a line with no message carries no parentheses" {
+	run_sourced "log PULL /some/repo Success ''"
+
+	[ "$status" -eq 0 ]
+	printf '%s\n' "$output" | grep -Eq \
+		'^\[[0-9-]{10} [0-9:]{8}\] PULL: /some/repo - Success$'
+}
+
 @test "a double quote in a path stays valid JSON" {
 	local quoted
 	quoted="$(make_clone "$REMOTE" 'quo"ted')"
@@ -113,7 +121,7 @@ write_section_config() {
 }
 
 @test "git output containing a quote stays valid JSON" {
-	# Defect 8.3: 0.1.0 pasted git's output into JSON unescaped.
+	# Defect 8.3: 1.0.0 pasted git's output into JSON unescaped.
 	git -C "$CLONE" remote set-url origin "$BATS_TEST_TMPDIR/go\"ne.git"
 	printf '[SETTINGS]\nlog_format = JSON\n\n[FETCH]\npath = %s\n' \
 		"$CLONE" > config.ini
@@ -125,9 +133,9 @@ write_section_config() {
 }
 
 @test "every run ends with one summary line" {
-	skip 'summary line arrives with v0.3.0 (CLAUDE.md §3.5, roadmap 3)'
+	skip 'the summary line is roadmap item 3 (CLAUDE.md §3.5)'
 }
 
 @test "a failed repository makes the run exit 2" {
-	skip 'exit-code contract arrives with v0.3.0 (CLAUDE.md §3.5, roadmap 3)'
+	skip 'the exit-code contract is roadmap item 3 (CLAUDE.md §3.5)'
 }
