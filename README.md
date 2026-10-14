@@ -85,6 +85,8 @@ Run the script with:
 - `--verbose, -v` - Display more detailed information about operations
 - `--quiet` - Print only errors on stdout; a log file, if any, still gets every line
 - `--jobs N` - Work on N repositories at a time (default 1)
+- `--status` - Report what every configured repository looks like and change nothing
+- `--self-check` - Report what this machine can do, then exit
 - `--strict-exit` - Exit `2` when a repository fails (the default from 3.0.0)
 - `--log-file FILE` - Write logs to the specified file as well as to stdout
 - `--version` - Print the version and exit
@@ -220,6 +222,7 @@ You can specify either individual repositories or parent directories containing 
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
 | `[DEFAULTS]`     | Option values every repository inherits: `exclude`, `max_depth`, `ssh_key`, `timeout`, `mirror_dir`, `fsck`, `verify_tags`. |
+| `[BUNDLE]`       | `git bundle` of what a repository gained since its last bundle, into `bundle_dir`, with a `SHA256SUMS` manifest beside it. |
 | `[MIRROR]`       | `git clone --mirror` the first time, `git remote update --prune` after that, into `mirror_dir`. Submodules named in `.gitmodules` are mirrored too, recursively. |
 | `[SILENT_UPDATE]`| `git fetch`, then `git branch -f` for every branch that tracks a remote, is behind it, and is not checked out in the repository or in any of its worktrees. Nothing is merged and no work tree is touched. A bare repository is skipped. |
 
@@ -246,6 +249,8 @@ timeout = 120
 | `mirror_dir`| Where `[MIRROR]` keeps its mirrors. Required by that section; without it every mirror is skipped. |
 | `fsck`      | `yes` runs `git fsck --connectivity-only` on a mirror after each update. |
 | `verify_tags`| `yes` verifies every *signed* tag in a mirror after each update. Unsigned tags are not checked. |
+| `bundle_dir`| Where `[BUNDLE]` writes its bundles and their `SHA256SUMS`. Required by that section. |
+| `on_change` | A command to run once for every repository whose refs moved, with `AUTOGIT_MODE` and `AUTOGIT_REPO` in its environment. |
 
 A repository can override `ssh_key` and `timeout` for itself, with git's
 own configuration:
@@ -262,25 +267,117 @@ decide what gets discovered in the first place, so they are read from
 
 ### Mirroring for air-gapped transfer
 
+`[MIRROR]` takes sources, not local paths — a source is as often a URL as a
+directory — so write them as `source =`. The older spelling `path =` means
+exactly the same thing and keeps working.
+
+Three repositories onto a disk you can carry:
+
 ```ini
 [DEFAULTS]
-mirror_dir = /srv/mirrors
+mirror_dir = /srv/transfer/mirrors
 
 [MIRROR]
-path = https://github.com/example/project.git
-path = /srv/git/internal.git
+source = https://github.com/example/project.git
+source = git@github.com:example/library.git
+source = /srv/git/internal.git
 ```
 
-Each source is mirrored to `<mirror_dir>/<name>.git`, where `<name>` is the
-last path element with any `.git` suffix removed. The first run clones with
-`--mirror`, every later run does `git remote update --prune`, so a ref
-deleted upstream disappears from the mirror as well.
+```console
+$ autogit-o-matic.sh --config /etc/autogit-o-matic.ini
+[2026-10-14 09:00:01] MIRROR: https://github.com/example/project.git - Success (mirrored)
+[2026-10-14 09:00:04] MIRROR: git@github.com:example/library.git - Success (mirrored)
+[2026-10-14 09:00:05] MIRROR: /srv/git/internal.git - Success (mirrored)
+[2026-10-14 09:00:05] SUMMARY: updated=3 unchanged=0 skipped=0 failed=0 duration=4s
+```
+
+That leaves `/srv/transfer/mirrors/project.git`, `library.git` and
+`internal.git`. Copy the directory to the machine behind the air gap and
+each one is a repository people can work from:
+
+```bash
+# A first copy on the other side.
+git clone /media/transfer/mirrors/project.git
+
+# Or feed a clone that already exists there.
+git -C ~/work/project remote add transfer /media/transfer/mirrors/project.git
+git -C ~/work/project fetch transfer
+```
+
+Run the same configuration again next week and only what moved is fetched:
+`updated=1 unchanged=2`. Each source is mirrored to
+`<mirror_dir>/<name>.git`, where `<name>` is the last path element with any
+`.git` suffix removed. The first run clones with `--mirror`, every later run
+does `git remote update --prune`, so a ref deleted upstream disappears from
+the mirror as well.
+
+### Bundles, when the disk has to stay small
+
+A mirror carries everything every time. `[BUNDLE]` carries only what is
+new, as one file per repository:
+
+```ini
+[DEFAULTS]
+bundle_dir = /srv/transfer/bundles
+
+[BUNDLE]
+source = /srv/git/project.git
+source = /srv/git/library.git
+source = /srv/git/internal.git
+```
+
+The first run writes a full bundle per repository; every later run writes
+one that contains only the commits added since, named
+`<name>-<timestamp>-<checksum>.bundle`. What has already been exported is
+recorded in `$GIT_DIR/autogit/bundle-tips` inside the repository itself, so
+nothing outside it has to be kept in step.
+
+Beside the bundles is a `SHA256SUMS` manifest, so the other side can tell a
+truncated copy from a whole one:
+
+```bash
+cd /media/transfer/bundles && sha256sum -c SHA256SUMS
+git clone project-20261014090001-1653878.bundle project   # the first one
+git -C project pull /media/transfer/bundles/project-20261021090002-9912034.bundle master
+```
+
+A bundle written without `sha256sum` on the machine still works; the log
+line says the manifest was skipped.
 
 Submodules are followed: after a mirror is updated, the `url` entries in its
 `HEAD:.gitmodules` are mirrored the same way, and so are theirs, up to five
 levels deep. A relative URL such as `../shared.git` resolves against the
 source it came from, exactly as git resolves it, so a group of repositories
 that reference each other relatively mirrors as a group.
+
+### Reacting to a change, and looking without touching
+
+`on_change` runs a command once for every repository whose refs moved, with
+`AUTOGIT_MODE` and `AUTOGIT_REPO` in its environment:
+
+```ini
+[DEFAULTS]
+on_change = systemctl --user restart my-site.service
+```
+
+Its output goes to stderr so that it cannot land in the middle of the log,
+and a hook that exits non-zero logs a `WARN` rather than failing a fetch
+that already succeeded. A single repository can set its own with
+`git config autogit.on-change '<command>'`.
+
+`--status` reports what every configured repository looks like and changes
+nothing — no fetch, no refs, not even a lock, so it is safe to run while a
+scheduled run is going:
+
+```console
+$ autogit-o-matic.sh --config /etc/autogit-o-matic.ini --status
+FETCH	/srv/git/project	master	ahead=0 behind=2	dirty=no
+PULL	/home/user/work/site	main	ahead=1 behind=0	dirty=yes
+```
+
+`--self-check` reports what the machine can do — git's version against the
+2.20 minimum, which optional tools are installed, whether the lock
+directory is writable — and needs no configuration file.
 
 ### Running several repositories at once
 
@@ -307,6 +404,17 @@ just check       # all of the above; the pre-commit gate
 The development dependencies are `shellcheck`, `checkbashisms` (Debian's
 `devscripts`), `shfmt`, `bats-core`, `jq`, `kcov`, `dash` and `busybox`. None
 of them is needed to run the script.
+
+## Scheduling
+
+`contrib/` has ready-made units and crontab lines:
+
+- `contrib/systemd/autogit-o-matic.service` and `.timer` — an hourly
+  `oneshot` run with `Persistent=true`, so a machine that was asleep catches
+  up instead of waiting for the next hour. The service treats exit code `3`
+  as success, because that only means the previous run is still going.
+- `contrib/cron.example` — the same thing for cron, including how to
+  swallow exit `3` when overlapping runs are expected.
 
 ## License
 

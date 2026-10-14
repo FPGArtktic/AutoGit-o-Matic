@@ -5,6 +5,38 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-10-14
+
+### Added
+
+- `[BUNDLE]`: one `git bundle` per repository into `bundle_dir`,
+  carrying only what the repository gained since its last bundle. What
+  has been exported is recorded in `$GIT_DIR/autogit/bundle-tips`,
+  inside the repository it describes, so no state outside it has to be
+  kept in step. Beside the bundles is a `SHA256SUMS` manifest; without
+  `sha256sum` installed the bundle is still written and the log line
+  says the manifest was skipped. A bundle's name carries a checksum of
+  the refs as well as the time, because two bundles written in the same
+  second would otherwise land on one file and an increment would be
+  lost.
+- `on_change`: a command run once for every repository whose refs
+  moved, with `AUTOGIT_MODE` and `AUTOGIT_REPO` in its environment and
+  its output on stderr. A hook that fails logs a `WARN`; it cannot fail
+  an operation that already succeeded. A repository overrides it with
+  `git config autogit.on-change`.
+- `--status`: a report of what every configured repository looks like —
+  mode, path, branch, how far it is from its upstream, whether the work
+  tree is dirty. It writes nothing and takes no lock, so it can be run
+  while a scheduled run is going.
+- `--self-check`: what this machine can do, from git's version against
+  the 2.20 minimum to which optional tools are installed. Needs no
+  configuration file.
+- `source =` as a spelling of `path =` in every section. A mirror's
+  value is as often a URL as a directory, and `path` read wrongly
+  there. `path =` keeps working everywhere.
+- `contrib/systemd/autogit-o-matic.service` and `.timer`, and
+  `contrib/cron.example`.
+
 ## [2.3.0] - 2026-10-14
 
 ### Added
@@ -154,7 +186,8 @@ this project adheres to
 - TXT and JSON Lines log formats, selected by `log_format` in
   `[SETTINGS]`.
 
-[2.3.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.2.0...HEAD
+[2.4.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v1.0.0...v2.0.0

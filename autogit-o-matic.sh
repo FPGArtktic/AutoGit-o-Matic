@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=2.3.0
+VERSION=2.4.0
 
 set -u
 
@@ -44,6 +44,7 @@ LOG_FILE=
 VERBOSE=no
 QUIET=no
 STRICT_EXIT=no
+STATUS_ONLY=no
 JOBS=1
 START_TIME=0
 TALLY_FILE=
@@ -51,6 +52,7 @@ SCRIPT_DIR=.
 INI_STREAM=
 LOCK_PATH=
 TIMEOUT_CMD=
+SHA256_CMD=
 
 # usage
 # Print the synopsis and the flag list on stdout.
@@ -66,6 +68,8 @@ usage() (
 		  --quiet          Print only errors on stdout; a log file still gets everything
 		  --jobs N         Work on N repositories at a time (default 1)
 		  --strict-exit    Exit 2 when a repository fails (the default from 3.0.0)
+		  --status         Report what every configured repository looks like, change nothing
+		  --self-check     Report what this machine can do, then exit
 		  --log-file FILE  Write logs to the specified file as well as to stdout
 		  --version        Print the version and exit
 		  --help           Display this help message and exit
@@ -485,6 +489,29 @@ git_fsck() (
 	git_run "${1}" fsck --connectivity-only
 )
 
+# git_dir REPO
+# Print REPO's git directory as an absolute path.
+git_dir() (
+	git -C "${1}" rev-parse --absolute-git-dir 2>/dev/null
+)
+
+# git_ref_list REPO
+# Print every ref in REPO as "objectname refname".
+git_ref_list() (
+	git -C "${1}" for-each-ref --format='%(objectname) %(refname)' \
+		2>/dev/null
+)
+
+# git_bundle_create REPO FILE EXCLUDES...
+# Bundle every ref in REPO except what the ^objectname EXCLUDES cover.
+git_bundle_create() (
+	repo="${1}"
+	file="${2}"
+	shift 2
+
+	git_run "${repo}" bundle create "${file}" --all "$@"
+)
+
 # discovery_depth
 # Print how deep discovery may go: max_depth in [DEFAULTS], else 1.
 discovery_depth() (
@@ -537,6 +564,128 @@ discover_repos() (
 		base=/
 	fi
 	discover_in "${base}" "${depth}"
+)
+
+# state_dir REPO
+# Print REPO's private state directory, creating it on the way. Private
+# state lives inside the repository it describes (CLAUDE.md 3.3).
+state_dir() (
+	dir="$(git_dir "${1}")"
+
+	if [ -z "${dir}" ]; then
+		return 1
+	fi
+	mkdir -p -- "${dir}/autogit" || return 1
+	printf '%s/autogit\n' "${dir}"
+)
+
+# bundle_tips REPO
+# Print the refs REPO's last bundle covered; nothing before the first.
+bundle_tips() (
+	dir="$(state_dir "${1}")"
+
+	if [ -z "${dir}" ] || [ ! -f "${dir}/bundle-tips" ]; then
+		return 0
+	fi
+	cat -- "${dir}/bundle-tips"
+)
+
+# write_bundle_tips REPO
+# Record REPO's refs as the point the next bundle starts from.
+write_bundle_tips() (
+	dir="$(state_dir "${1}")"
+
+	if [ -z "${dir}" ]; then
+		return 1
+	fi
+	git_ref_list "${1}" >"${dir}/bundle-tips"
+)
+
+# bundle_is_current REPO
+# Returns 0 when REPO's refs are exactly what the last bundle covered.
+bundle_is_current() (
+	now="$(git_ref_list "${1}")"
+	last="$(bundle_tips "${1}")"
+
+	[ "${now}" = "${last}" ]
+)
+
+# bundle_excludes REPO
+# Print a ^objectname line for every ref the last bundle covered.
+bundle_excludes() (
+	bundle_tips "${1}" | awk '{ print "^" $1 }'
+)
+
+# bundle_file REPO DIR
+# Print the path of the bundle to write for REPO under DIR. The name
+# carries a checksum of the refs as well as the time, because two
+# bundles written in the same second would otherwise collide and the
+# older increment would be lost.
+bundle_file() (
+	stamp="$(date '+%Y%m%d%H%M%S')"
+	sum="$(git_ref_list "${1}" | cksum)"
+	source="${1%/}"
+	name="${source##*/}"
+
+	printf '%s/%s-%s-%s.bundle\n' "${2%/}" "${name%.git}" "${stamp}" \
+		"${sum%% *}"
+)
+
+# bundle_manifest FILE
+# Append FILE's checksum to the SHA256SUMS beside it, when sha256sum is
+# installed. Prints what the repository ended up producing.
+bundle_manifest() (
+	name="${1##*/}"
+	dir="${1%/*}"
+
+	if [ -z "${SHA256_CMD}" ]; then
+		printf 'bundled %s, no sha256sum for the manifest\n' "${name}"
+		return 0
+	fi
+	(cd -- "${dir}" && "${SHA256_CMD}" -- "${name}" >>SHA256SUMS) ||
+		return 2
+	printf 'bundled %s\n' "${name}"
+)
+
+# bundle_write REPO DIR
+# Bundle what REPO gained since its last bundle into DIR.
+# Returns 0 done, 2 git error; prints what happened.
+bundle_write() (
+	repo="${1}"
+	dir="${2}"
+
+	if bundle_is_current "${repo}"; then
+		printf 'nothing new to bundle\n'
+		return 0
+	fi
+	file="$(bundle_file "${repo}" "${dir}")"
+	excludes="$(bundle_excludes "${repo}")"
+
+	# set -- replaces the positional parameters, so the arguments are
+	# held by name first. Deliberate word splitting: every item is
+	# ^<objectname>, which holds neither a space nor a glob character.
+	# shellcheck disable=SC2086
+	set -- ${excludes}
+	if ! output="$(git_bundle_create "${repo}" "${file}" "$@")"; then
+		printf '%s\n' "${output}"
+		return 2
+	fi
+	write_bundle_tips "${repo}"
+	bundle_manifest "${file}"
+)
+
+# do_bundle REPO
+# Write an incremental bundle of REPO for carrying elsewhere.
+# Returns 0 done, 1 skipped, 2 git error.
+do_bundle() (
+	dir="$(option_value bundle_dir "${1}")"
+
+	if [ -z "${dir}" ]; then
+		printf 'no bundle_dir is configured\n'
+		return 1
+	fi
+	mkdir -p -- "${dir}" || return 2
+	bundle_write "${1}" "${dir}"
 )
 
 # yes_option KEY REPO
@@ -742,6 +891,9 @@ dry_run_message() (
 	MIRROR)
 		printf 'Would clone or update the mirror\n'
 		;;
+	BUNDLE)
+		printf 'Would write a bundle of what is new\n'
+		;;
 	*)
 		verb="$(mode_verb "${1}")"
 		printf "Would execute 'git %s'\n" "${verb}"
@@ -826,6 +978,9 @@ run_mode() (
 	MIRROR)
 		do_mirror "${2}"
 		;;
+	BUNDLE)
+		do_bundle "${2}"
+		;;
 	*)
 		printf 'unknown mode: %s\n' "${1}"
 		return 2
@@ -848,13 +1003,17 @@ section_targets() (
 )
 
 # fingerprint_target MODE TARGET
-# Print the ref checksum that shows MODE's effect on TARGET. For MIRROR
-# the effect lands in the mirror, not in the source.
+# Print the checksum that shows MODE's effect on TARGET. For MIRROR the
+# effect lands in the mirror, and for BUNDLE in the exported tips - a
+# repository's own refs do not move when it is bundled.
 fingerprint_target() (
 	case "${1}" in
 	MIRROR)
 		dest="$(mirror_target "${2}")"
 		refs_fingerprint "${dest}"
+		;;
+	BUNDLE)
+		bundle_tips "${2}" | cksum
 		;;
 	*)
 		refs_fingerprint "${2}"
@@ -874,6 +1033,37 @@ report_success() (
 		return 0
 	fi
 	tally_add updated
+	run_on_change "${1}" "${2}"
+)
+
+# hook_run COMMAND
+# Run COMMAND through sh, bounded by timeout(1) when it is installed.
+hook_run() (
+	if [ -n "${TIMEOUT_CMD}" ]; then
+		"${TIMEOUT_CMD}" "${GIT_TIMEOUT}" sh -c "${1}"
+		return "$?"
+	fi
+	sh -c "${1}"
+)
+
+# run_on_change MODE REPO
+# Run REPO's on_change command with AUTOGIT_MODE and AUTOGIT_REPO in
+# its environment. A hook that fails warns; it cannot fail a run that
+# has already succeeded. Its output goes to stderr, so that it cannot
+# land in the middle of the log stream.
+run_on_change() (
+	command_line="$(option_value on_change "${2}")"
+
+	if [ -z "${command_line}" ]; then
+		return 0
+	fi
+	AUTOGIT_MODE="${1}"
+	AUTOGIT_REPO="${2}"
+	export AUTOGIT_MODE AUTOGIT_REPO
+	if hook_run "${command_line}" >&2; then
+		return 0
+	fi
+	warn "on_change failed for ${2}"
 )
 
 # process_repo MODE REPO
@@ -942,7 +1132,7 @@ process_repos() (
 # run_section MODE
 # Run MODE on every path its section of the config lists.
 run_section() (
-	section_values "${1}" path |
+	section_entries "${1}" |
 		while IFS= read -r path; do
 			verbose INFO "Found ${1} path: ${path}"
 			process_repos "${1}" "${path}"
@@ -952,8 +1142,77 @@ run_section() (
 # run_sections
 # Run every section the config defines, in the order 1.0.0 used.
 run_sections() (
-	for mode in PULL FETCH SILENT_UPDATE MIRROR; do
+	for mode in PULL FETCH SILENT_UPDATE MIRROR BUNDLE; do
 		run_section "${mode}"
+	done
+)
+
+# git_current_branch REPO
+# Print REPO's checked out branch; nothing when detached or bare.
+git_current_branch() (
+	git -C "${1}" symbolic-ref --short -q HEAD 2>/dev/null
+)
+
+# git_ahead_behind REPO BRANCH
+# Print "ahead=N behind=N" for BRANCH against its upstream, or dashes
+# when it tracks nothing.
+git_ahead_behind() (
+	upstream="$(git_upstream "${1}" "${2}")"
+
+	if [ -z "${upstream}" ]; then
+		printf 'ahead=- behind=-\n'
+		return 0
+	fi
+	counts="$(git -C "${1}" rev-list --left-right --count \
+		"${2}...${upstream}" 2>/dev/null)"
+	printf 'ahead=%s behind=%s\n' "${counts%%	*}" \
+		"${counts##*	}"
+)
+
+# status_line MODE REPO
+# Print one tab-separated record about REPO: nothing for a path that is
+# not a repository.
+status_line() (
+	if [ -z "${2}" ] || ! git_is_repo "${2}"; then
+		return 0
+	fi
+	branch="$(git_current_branch "${2}")"
+	counts="$(git_ahead_behind "${2}" "${branch}")"
+	dirty=no
+
+	if git_dirty "${2}"; then
+		dirty=yes
+	fi
+	printf '%s\t%s\t%s\t%s\tdirty=%s\n' "${1}" "${2}" \
+		"${branch:--}" "${counts}" "${dirty}"
+)
+
+# status_paths MODE PATH
+# Print a status record for every repository MODE would work on at PATH.
+status_paths() (
+	targets="$(section_targets "${1}" "${2}")"
+
+	while IFS= read -r repo; do
+		status_line "${1}" "${repo}"
+	done <<-EOF
+		${targets}
+	EOF
+)
+
+# status_section MODE
+# Print the status of every path MODE's section lists.
+status_section() (
+	section_entries "${1}" |
+		while IFS= read -r path; do
+			status_paths "${1}" "${path}"
+		done
+)
+
+# status_report
+# Report what every configured repository looks like, changing nothing.
+status_report() (
+	for mode in PULL FETCH SILENT_UPDATE MIRROR BUNDLE; do
+		status_section "${mode}"
 	done
 )
 
@@ -1008,6 +1267,15 @@ parse_ini() (
 	}
 	# kcov-exclude-stop
 	' <"${1}"
+)
+
+# section_entries SECTION
+# Print what SECTION lists. "path" is the spelling 1.0.0 used and it
+# keeps working; "source" means exactly the same and reads better for a
+# mirror, whose value is a URL as often as a path.
+section_entries() (
+	section_values "${1}" path
+	section_values "${1}" source
 )
 
 # section_values SECTION KEY
@@ -1145,6 +1413,77 @@ lock_release() (
 	return 0
 )
 
+# check_tool NAME KIND
+# Report whether NAME is installed. Returns 1 when a required tool is
+# missing, 0 for anything optional.
+check_tool() (
+	path="$(command -v "${1}" 2>/dev/null)"
+
+	if [ -n "${path}" ]; then
+		printf 'ok       %-10s %s\n' "${1}" "${path}"
+		return 0
+	fi
+	printf '%-8s %-10s not found\n' "${2}" "${1}"
+	if [ "${2}" = required ]; then
+		return 1
+	fi
+)
+
+# check_git_version
+# Report whether git is new enough for everything this script uses.
+check_git_version() (
+	version="$(git --version 2>/dev/null | awk '{ print $3 }')"
+	rest="${version#*.}"
+	major="${version%%.*}"
+	minor="${rest%%.*}"
+
+	case "${major}${minor}" in
+	'' | *[!0-9]*)
+		printf 'required git        version %s is unreadable\n' \
+			"${version}"
+		return 1
+		;;
+	*)
+		# Both parts are numbers, so the arithmetic below is safe.
+		;;
+	esac
+	if [ "$((major * 100 + minor))" -lt 220 ]; then
+		printf 'required git        %s is older than 2.20\n' "${version}"
+		return 1
+	fi
+	printf 'ok       git        %s\n' "${version}"
+)
+
+# check_writable PATH LABEL
+# Report whether PATH can be written to; never fails the check.
+check_writable() (
+	if [ -w "${1}" ]; then
+		printf 'ok       %-10s %s is writable\n' "${2}" "${1}"
+		return 0
+	fi
+	printf 'warn     %-10s %s is not writable\n' "${2}" "${1}"
+)
+
+# self_check
+# Report what this machine can do. Returns 1 when something the script
+# cannot work without is missing.
+self_check() (
+	missing=0
+
+	for tool in git awk sed tr cut date cksum grep mkdir rmdir; do
+		check_tool "${tool}" required || missing=$((missing + 1))
+	done
+	for tool in timeout sha256sum flock; do
+		check_tool "${tool}" optional || true
+	done
+	check_git_version || missing=$((missing + 1))
+	check_writable "${TMPDIR:-/tmp}" lockdir
+	printf 'version  %-10s %s\n' autogit "${VERSION}"
+	if [ "${missing}" -gt 0 ]; then
+		return 1
+	fi
+)
+
 # is_count VALUE
 # Returns 0 when VALUE is a positive decimal number.
 is_count() (
@@ -1184,6 +1523,9 @@ set_option() {
 	--dry-run)
 		DRY_RUN=yes
 		;;
+	--status)
+		STATUS_ONLY=yes
+		;;
 	--quiet)
 		QUIET=yes
 		;;
@@ -1213,11 +1555,15 @@ parse_args() {
 			printf '%s\n' "${VERSION}"
 			exit "${EXIT_OK}"
 			;;
+		--self-check)
+			self_check
+			exit "$?"
+			;;
 		--config | --log-file | --jobs)
 			set_option "${1}" "${2:-}"
 			shift 2
 			;;
-		--dry-run | --verbose | -v | --quiet | --strict-exit)
+		--dry-run | --verbose | -v | --quiet | --strict-exit | --status)
 			set_option "${1}" ''
 			shift
 			;;
@@ -1251,9 +1597,14 @@ main() {
 	verbose INFO "Using configuration file: ${CONFIG_FILE}"
 	INI_STREAM="$(parse_ini "${CONFIG_FILE}")"
 	apply_settings
+	SHA256_CMD="$(command -v sha256sum 2>/dev/null)"
 	TIMEOUT_CMD="$(command -v timeout 2>/dev/null)"
 	if [ -z "${TIMEOUT_CMD}" ]; then
 		warn 'timeout(1) not found: a git call can hang'
+	fi
+	if [ "${STATUS_ONLY}" = yes ]; then
+		status_report
+		return "${EXIT_OK}"
 	fi
 	LOCK_PATH="$(lock_path "${CONFIG_FILE}")"
 	if ! lock_acquire "${LOCK_PATH}"; then

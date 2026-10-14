@@ -101,6 +101,17 @@ setup() {
 	[ ! -d "$MIRRORS/absent.git" ]
 }
 
+@test "source = names a mirror the way a URL reads" {
+	printf '[DEFAULTS]\nmirror_dir = %s\n\n[MIRROR]\nsource = %s\n' \
+		"$MIRRORS" "$SUPER" > config.ini
+
+	run_tool --config config.ini
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"MIRROR: $SUPER - Success"* ]]
+	[ -d "$MIRRORS/super.git" ]
+}
+
 @test "no mirror_dir is a skip, not a failure" {
 	printf '[MIRROR]\npath = %s\n' "$SUPER" > config.ini
 

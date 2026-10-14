@@ -24,9 +24,14 @@ log_format = TXT
 # max_depth = 2
 # ssh_key = /home/user/.ssh/deploy
 # timeout = 120
-# mirror_dir = /srv/mirrors
+# bundle_dir  - where [BUNDLE] writes bundles and their SHA256SUMS
+# on_change   - command run once per repository whose refs moved, with
+#               AUTOGIT_MODE and AUTOGIT_REPO in its environment
+# mirror_dir = /srv/transfer/mirrors
+# bundle_dir = /srv/transfer/bundles
 # fsck = yes
 # verify_tags = yes
+# on_change = systemctl --user restart my-site.service
 
 [PULL]
 # Paths to repositories you want to update using 'git pull'
@@ -65,8 +70,18 @@ path = /home/user/git/important-project/
 # network. The first run clones with --mirror, later runs update and
 # prune. Submodules named in .gitmodules are mirrored too, and a
 # relative URL like ../shared.git resolves against its source.
-# https://github.com/example/project.git
-# /srv/git/internal.git
+# Write these as 'source =': the value is as often a URL as a path.
+# 'path =' means the same thing and still works.
+# source = https://github.com/example/project.git
+# source = git@github.com:example/library.git
+# source = /srv/git/internal.git
+
+# [BUNDLE]
+# Repositories to export incrementally, one bundle per run per
+# repository, into bundle_dir. The first run writes everything, later
+# runs only what was added since. Pair it with mirrors when the disk
+# you carry has to stay small.
+# source = /srv/git/project.git
 
 # [EXAMPLE OF ANOTHER SECTION]
 # Future versions may support additional sections

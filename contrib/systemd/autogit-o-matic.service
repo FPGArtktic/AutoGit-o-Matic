@@ -1,0 +1,27 @@
+# A single run of autogit-o-matic. Pair it with the timer beside this
+# file; the timer decides when, the service decides what.
+#
+# Install for your own user:
+#   mkdir -p ~/.config/systemd/user
+#   cp autogit-o-matic.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now autogit-o-matic.timer
+#
+# Edit ExecStart to point at your script and configuration file.
+
+[Unit]
+Description=Keep Git repositories current
+Documentation=https://github.com/FPGArtktic/AutoGit-o-Matic
+# Nothing to do without a network, so do not even start.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/autogit-o-matic.sh --config %h/.config/autogit-o-matic.ini --quiet
+# A run that finds the lock held exits 3. That is not a failure worth
+# reporting: the previous run is still going.
+SuccessExitStatus=3
+# The script never needs more than the repositories it is pointed at.
+PrivateTmp=false
+NoNewPrivileges=true

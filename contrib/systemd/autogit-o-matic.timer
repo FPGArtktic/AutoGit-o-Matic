@@ -1,0 +1,17 @@
+# Hourly runs, caught up after the machine was asleep or switched off.
+
+[Unit]
+Description=Hourly autogit-o-matic run
+Documentation=https://github.com/FPGArtktic/AutoGit-o-Matic
+
+[Timer]
+OnCalendar=hourly
+# Run the missed one once the machine is back, instead of waiting for
+# the next whole hour.
+Persistent=true
+# Spread the load when several machines share a server.
+RandomizedDelaySec=5m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

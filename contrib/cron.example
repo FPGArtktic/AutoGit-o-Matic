@@ -1,0 +1,18 @@
+# autogit-o-matic from cron. Use absolute paths: cron's PATH is short
+# and its working directory is not where you think it is.
+#
+# --quiet keeps the mail quiet unless something actually failed. Drop
+# it, or add --log-file, when you want a record of every run.
+
+# Every hour, on the hour.
+0 * * * * /usr/local/bin/autogit-o-matic.sh --config /etc/autogit-o-matic.ini --quiet
+
+# Every fifteen minutes, with a log file instead of mail.
+# */15 * * * * /usr/local/bin/autogit-o-matic.sh --config /etc/autogit-o-matic.ini --quiet --log-file /var/log/autogit-o-matic.log
+
+# Daily at 03:30, four repositories at a time.
+# 30 3 * * * /usr/local/bin/autogit-o-matic.sh --config /etc/autogit-o-matic.ini --quiet --jobs 4
+
+# A run that finds the lock held exits 3; cron treats any non-zero exit
+# as a failure, so swallow that one if overlapping runs are expected:
+# 0 * * * * /usr/local/bin/autogit-o-matic.sh --config /etc/autogit-o-matic.ini --quiet || [ $? -eq 3 ]

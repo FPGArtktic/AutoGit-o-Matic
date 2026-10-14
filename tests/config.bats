@@ -95,6 +95,28 @@ setup() {
 	[[ "$output" == *"PULL: $second"* ]]
 }
 
+@test "source = is read like path =" {
+	printf '[PULL]\nsource = %s\n' "$CLONE" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"PULL: $CLONE"* ]]
+}
+
+@test "path = and source = can share one section" {
+	local second
+	second="$(make_clone "$REMOTE" other)"
+	printf '[PULL]\npath = %s\nsource = %s\n' "$CLONE" "$second" \
+		> config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"PULL: $CLONE"* ]]
+	[[ "$output" == *"PULL: $second"* ]]
+}
+
 @test "an inline comment after log_format is ignored" {
 	# README documents "log_format = JSON  # Can be TXT or JSON".
 	printf '[SETTINGS]\nlog_format = JSON  # Can be TXT or JSON\n' > config.ini
