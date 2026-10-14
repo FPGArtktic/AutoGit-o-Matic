@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=2.4.0
+VERSION=2.5.0
 
 set -u
 
@@ -45,6 +45,7 @@ VERBOSE=no
 QUIET=no
 STRICT_EXIT=no
 STATUS_ONLY=no
+SUMMARY=yes
 JOBS=1
 START_TIME=0
 TALLY_FILE=
@@ -249,6 +250,9 @@ summary_json() (
 # Print the one line every run ends with (CLAUDE.md 3.5). Every field
 # is an integer or a literal, so none of them needs JSON escaping.
 log_summary() (
+	if [ "${SUMMARY}" = no ]; then
+		return 0
+	fi
 	now="$(timestamp)"
 	seconds="$(run_seconds)"
 	counts="updated=$(tally_count updated)"
@@ -1323,11 +1327,30 @@ set_exit_policy() {
 	esac
 }
 
+# set_summary_policy
+# Drop the summary line when [SETTINGS] asks for that. It is the one
+# line 1.0.0 did not print, so a reader that parses every line of
+# stdout needs a way to say no to it.
+# Mutates global state on purpose (CLAUDE.md 3.2).
+set_summary_policy() {
+	value="$(setting_value summary)"
+
+	case "${value}" in
+	no | NO | No | false | 0)
+		SUMMARY=no
+		;;
+	*)
+		# Anything else, the empty string included, keeps the line.
+		;;
+	esac
+}
+
 # apply_settings
 # Apply every [SETTINGS] key. Mutates global state on purpose.
 apply_settings() {
 	set_log_format
 	set_exit_policy
+	set_summary_policy
 }
 
 # exit_code FAILED

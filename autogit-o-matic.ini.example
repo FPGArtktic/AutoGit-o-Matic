@@ -9,6 +9,10 @@ log_format = TXT
 # in 3.0.0; opting in now silences the warning about that change.
 # exit_on_failure = yes
 
+# Every run ends with one SUMMARY line. It is the only line 1.0.0 did
+# not print, so say no here if something parses this log line by line.
+# summary = no
+
 # [DEFAULTS]
 # Values every repository in the run inherits.
 # exclude   - comma-separated globs; a matching repository is skipped

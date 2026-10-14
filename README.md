@@ -127,6 +127,17 @@ the same line is its own record, with integer fields:
 `--quiet` suppresses the summary along with everything else that is not an
 error; a `--log-file` still receives it.
 
+The summary is the one line 1.0.0 did not print, so a reader that parses
+every line of the log can be told to do without it:
+
+```ini
+[SETTINGS]
+summary = no
+```
+
+That drops the line from stdout and from a log file alike. Anything other
+than `no`, `false` or `0` — the empty string included — keeps it.
+
 ### Example
 
 ```bash
@@ -218,7 +229,7 @@ You can specify either individual repositories or parent directories containing 
 
 | section          | effect                                                                    |
 |------------------|---------------------------------------------------------------------------|
-| `[SETTINGS]`     | `log_format = TXT` or `JSON`, and `exit_on_failure = yes` to opt into exit code `2`. An inline `# comment` after the value is ignored. |
+| `[SETTINGS]`     | `log_format = TXT` or `JSON`, `exit_on_failure = yes` to opt into exit code `2`, `summary = no` to drop the summary line. An inline `# comment` after the value is ignored. |
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
 | `[DEFAULTS]`     | Option values every repository inherits: `exclude`, `max_depth`, `ssh_key`, `timeout`, `mirror_dir`, `fsck`, `verify_tags`. |

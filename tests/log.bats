@@ -143,6 +143,39 @@ write_section_config() {
 	[ "$(printf '%s\n' "$output" | grep -c 'SUMMARY:')" -eq 1 ]
 }
 
+@test "summary = no drops the line everywhere" {
+	printf '[SETTINGS]\nsummary = no\n\n[PULL]\npath = %s\n' \
+		"$CLONE" > config.ini
+
+	run_tool_stdout --config config.ini --dry-run --log-file run.log
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"PULL: $CLONE"* ]]
+	[[ "$output" != *"SUMMARY"* ]]
+	[ -f run.log ]
+	! grep -q 'SUMMARY' run.log
+}
+
+@test "summary = yes is the default spelled out" {
+	printf '[SETTINGS]\nsummary = yes\n\n[PULL]\npath = %s\n' \
+		"$CLONE" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"SUMMARY:"* ]]
+}
+
+@test "an unreadable summary setting keeps the line" {
+	printf '[SETTINGS]\nsummary = maybe\n\n[PULL]\npath = %s\n' \
+		"$CLONE" > config.ini
+
+	run_tool --config config.ini --dry-run
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"SUMMARY:"* ]]
+}
+
 @test "the summary counts updated, unchanged, skipped and failed" {
 	local second
 	second="$(make_clone "$REMOTE" other)"
