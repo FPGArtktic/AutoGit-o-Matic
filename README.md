@@ -29,6 +29,7 @@ AutoGit-o-Matic is a single POSIX shell script that automates Git operations acr
 - **Dry-run** capability to simulate operations without making actual changes
 - **Configurable paths** via an INI file
 - **Safe unattended pulls**: `git pull --ff-only`, so a run can never leave a merge commit behind
+- **Silent updates**: fast-forward branches nobody has checked out, without ever touching a work tree
 - **One run at a time** per configuration file, so overlapping cron jobs cannot collide
 - **No hanging on credentials**: `GIT_TERMINAL_PROMPT=0` is always set, and each git call is bounded by `timeout(1)` when it is installed
 
@@ -181,6 +182,7 @@ You can specify either individual repositories or parent directories containing 
 | `[SETTINGS]`     | `log_format = TXT` or `JSON`. An inline `# comment` after the value is ignored. |
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
+| `[SILENT_UPDATE]`| `git fetch`, then `git branch -f` for every branch that tracks a remote, is behind it, and is not checked out in the repository or in any of its worktrees. Nothing is merged and no work tree is touched. A bare repository is skipped. |
 
 Unknown sections are ignored, and section names are case insensitive.
 

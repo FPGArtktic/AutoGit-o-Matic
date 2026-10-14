@@ -29,6 +29,14 @@ path = /home/user/git/important-project/
 # Comments start with '#' or ';'
 ; path = /home/user/git/another-project/
 
+[SILENT_UPDATE]
+# Paths to repositories you want kept current without touching their
+# work trees. The script fetches, then fast-forwards every branch that
+# tracks a remote, is behind it, and is not checked out anywhere - in
+# the repository itself or in any of its worktrees. Nothing is merged,
+# so this is the safe choice for clones somebody is working in.
+# /home/user/git/clone-i-work-in/
+
 # [EXAMPLE OF ANOTHER SECTION]
 # Future versions may support additional sections
 # for other Git operations such as status, push, etc.

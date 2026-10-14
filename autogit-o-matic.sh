@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=2.0.0
+VERSION=2.1.0
 
 set -u
 
@@ -237,6 +237,39 @@ git_pull() (
 	git_run "${1}" pull --ff-only
 )
 
+# git_upstream REPO BRANCH
+# Print the ref BRANCH tracks in REPO; nothing when it tracks none.
+git_upstream() (
+	git -C "${1}" rev-parse --symbolic-full-name --verify \
+		"${2}@{upstream}" 2>/dev/null
+)
+
+# git_checked_out_branches REPO
+# Print every branch checked out in REPO or in one of its worktrees.
+git_checked_out_branches() (
+	git -C "${1}" worktree list --porcelain |
+		awk '/^branch / { sub(/^branch refs\/heads\//, ""); print }'
+)
+
+# git_ff_branch REPO BRANCH UPSTREAM
+# Move BRANCH to UPSTREAM if that is a fast-forward; never checks out.
+# Returns 0 moved, 1 nothing to do or not a fast-forward, 2 git error.
+git_ff_branch() (
+	from="$(git -C "${1}" rev-parse --verify "${2}" 2>/dev/null)"
+	to="$(git -C "${1}" rev-parse --verify "${3}" 2>/dev/null)"
+
+	if [ -z "${from}" ] || [ "${from}" = "${to}" ]; then
+		return 1
+	fi
+	if ! git -C "${1}" merge-base --is-ancestor "${2}" "${3}"; then
+		return 1
+	fi
+	if git_run "${1}" branch -f "${2}" "${3}" >/dev/null; then
+		return 0
+	fi
+	return 2
+)
+
 # discover_repos PATH
 # Print every repository at PATH or one level below it, one per line.
 # Work trees, linked worktrees and bare mirrors all come out the same.
@@ -290,6 +323,68 @@ do_pull() (
 	return 2
 )
 
+# ff_branch_safe REPO BRANCH CHECKED_OUT
+# Fast-forward BRANCH unless it tracks nothing or appears in the
+# newline-separated CHECKED_OUT. Returns git_ff_branch's status.
+ff_branch_safe() (
+	upstream="$(git_upstream "${1}" "${2}")"
+
+	if [ -z "${upstream}" ]; then
+		return 1
+	fi
+	if printf '%s\n' "${3}" | grep -Fqx -- "${2}"; then
+		return 1
+	fi
+	git_ff_branch "${1}" "${2}" "${upstream}"
+)
+
+# ff_branches REPO
+# Print the name of every branch of REPO that was fast-forwarded.
+ff_branches() (
+	checked_out="$(git_checked_out_branches "${1}")"
+
+	git -C "${1}" for-each-ref --format='%(refname:short)' refs/heads |
+		while IFS= read -r branch; do
+			if ff_branch_safe "${1}" "${branch}" "${checked_out}"; then
+				printf '%s\n' "${branch}"
+			fi
+		done
+)
+
+# do_silent_update REPO
+# Fetch REPO, then fast-forward the branches nobody has checked out.
+# Returns 0 done, 1 skipped, 2 git error; prints what it did.
+do_silent_update() (
+	if git_is_bare "${1}"; then
+		printf 'bare repository\n'
+		return 1
+	fi
+	if ! output="$(git_fetch "${1}")"; then
+		printf '%s\n' "${output}"
+		return 2
+	fi
+	moved="$(ff_branches "${1}" | tr '\n' ' ')"
+	if [ -z "${moved}" ]; then
+		printf 'nothing to fast-forward\n'
+		return 0
+	fi
+	printf 'moved: %s\n' "${moved% }"
+)
+
+# dry_run_message MODE
+# Print the message a dry run logs for MODE.
+dry_run_message() (
+	case "${1}" in
+	SILENT_UPDATE)
+		printf 'Would fetch and fast-forward what is safe\n'
+		;;
+	*)
+		verb="$(mode_verb "${1}")"
+		printf "Would execute 'git %s'\n" "${verb}"
+		;;
+	esac
+)
+
 # run_mode MODE REPO
 # Dispatch MODE to its handler; a new mode means one arm here.
 run_mode() (
@@ -299,6 +394,9 @@ run_mode() (
 		;;
 	PULL)
 		do_pull "${2}"
+		;;
+	SILENT_UPDATE)
+		do_silent_update "${2}"
 		;;
 	*)
 		printf 'unknown mode: %s\n' "${1}"
@@ -314,8 +412,8 @@ process_repo() (
 	verb="$(mode_verb "${1}")"
 
 	if [ "${DRY_RUN}" = yes ]; then
-		log "${1}" "${2}" 'Success (Dry Run)' \
-			"Would execute 'git ${verb}'"
+		message="$(dry_run_message "${1}")"
+		log "${1}" "${2}" 'Success (Dry Run)' "${message}"
 		return 0
 	fi
 	output="$(run_mode "${1}" "${2}")"
@@ -362,7 +460,7 @@ run_section() (
 # run_sections
 # Run every section the config defines, in the order 1.0.0 used.
 run_sections() (
-	for mode in PULL FETCH; do
+	for mode in PULL FETCH SILENT_UPDATE; do
 		run_section "${mode}"
 	done
 )

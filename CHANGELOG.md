@@ -5,7 +5,19 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-10-14
+
+### Added
+
+- `[SILENT_UPDATE]`: fetch a repository, then move every branch that
+  tracks a remote and is strictly behind it with `git branch -f`. A
+  branch is left alone when it tracks nothing, when it has diverged or
+  is ahead, and when it is checked out in the repository or in any of
+  its worktrees. No work tree is ever touched and nothing is merged,
+  which makes the mode safe to run from cron against clones somebody
+  is working in. A bare repository is skipped with a `WARN`.
+- `git_upstream`, `git_checked_out_branches` and `git_ff_branch` as
+  single-purpose git primitives behind that mode.
 
 ## [2.0.0] - 2026-10-14
 
@@ -84,6 +96,6 @@ this project adheres to
 - TXT and JSON Lines log formats, selected by `log_format` in
   `[SETTINGS]`.
 
-[Unreleased]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.0.0...HEAD
+[2.1.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/releases/tag/v1.0.0
