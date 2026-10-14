@@ -1,6 +1,5 @@
-#!/bin/bash
-# AutoGit-o-Matic: Automate Git operations across multiple repositories
-# Version: 0.1.0
+#!/bin/sh
+# AutoGit-o-Matic: keep many Git repositories current from cron/systemd.
 #
 # Copyright (C) 2025 Mateusz Okulanis
 # Email: FPGArtktic@outlook.com
@@ -18,414 +17,580 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Default values
-CONFIG_FILE="autogit-o-matic.ini"
-DRY_RUN=false
-LOG_FORMAT="TXT"
-VERBOSE=false
-LOG_FILE=""  # When empty, no log file is created. When specified, all logs go ONLY to this file
+VERSION=0.2.0
 
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+set -u
 
-# Print usage information
-print_usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo "AutoGit-o-Matic: Automate Git operations across multiple repositories."
-    echo ""
-    echo "Options:"
-    echo "  --config FILE    Path to the configuration file (default: autogit-o-matic.ini)"
-    echo "  --dry-run        Simulate operations without actually executing Git commands"
-    echo "  --verbose, -v    Display more detailed information about operations"
-    echo "  --log-file FILE  Write logs to the specified file (creates a single log file only at this location)"
-    echo "  --help           Display this help message and exit"
-    echo ""
+GIT_TERMINAL_PROMPT=0
+export GIT_TERMINAL_PROMPT
+
+readonly PROGRAM_NAME=autogit-o-matic
+# Longest piece of git output kept on one log line.
+readonly OUTPUT_LIMIT=150
+# Seconds one git invocation may take, when timeout(1) is installed.
+readonly GIT_TIMEOUT=300
+# Exit codes. 2 (a repository failed) arrives with the summary line.
+readonly EXIT_OK=0
+readonly EXIT_USAGE=1
+readonly EXIT_LOCKED=3
+
+CONFIG_FILE=autogit-o-matic.ini
+DRY_RUN=no
+LOG_FORMAT=TXT
+LOG_FILE=
+VERBOSE=no
+SCRIPT_DIR=.
+INI_STREAM=
+LOCK_PATH=
+TIMEOUT_CMD=
+
+# usage
+# Print the synopsis and the flag list on stdout.
+usage() (
+	cat <<-EOF
+		Usage: ${0} [OPTIONS]
+		AutoGit-o-Matic: Automate Git operations across multiple repositories.
+
+		Options:
+		  --config FILE    Path to the configuration file (default: autogit-o-matic.ini)
+		  --dry-run        Simulate operations without actually executing Git commands
+		  --verbose, -v    Display more detailed information about operations
+		  --log-file FILE  Write logs to the specified file as well as to stdout
+		  --version        Print the version and exit
+		  --help           Display this help message and exit
+
+	EOF
+)
+
+# warn MESSAGE
+# Report MESSAGE on stderr as "autogit-o-matic: MESSAGE"; the run goes on.
+warn() (
+	printf '%s: %s\n' "${PROGRAM_NAME}" "${1}" >&2
+)
+
+# die CODE MESSAGE
+# Report MESSAGE on stderr and leave the script with status CODE.
+# Brace body on purpose: exit must leave the script, not a subshell.
+die() {
+	warn "${2}"
+	exit "${1}"
 }
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --config)
-            CONFIG_FILE="$2"
-            shift 2
-            ;;
-        --dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        --verbose|-v)
-            VERBOSE=true
-            shift
-            ;;
-        --log-file)
-            LOG_FILE="$2"  # This is the only location where logs will be written to
-            shift 2
-            ;;
-        --help)
-            print_usage
-            exit 0
-            ;;
-        *)
-            echo "Error: Unknown option $1"
-            print_usage
-            exit 1
-            ;;
-    esac
-done
+# script_directory
+# Print the directory holding this script, as 0.1.0 did with BASH_SOURCE.
+script_directory() (
+	here="$(dirname -- "${0}")"
 
-# Check if the configuration file exists
-if [ ! -f "$CONFIG_FILE" ]; then
-    # If config file not found, check if it exists in the script directory
-    if [ -f "$SCRIPT_DIR/$CONFIG_FILE" ]; then
-        CONFIG_FILE="$SCRIPT_DIR/$CONFIG_FILE"
-        if $VERBOSE; then
-            verbose_log "Using configuration file from script directory: $CONFIG_FILE"
-        fi
-    else
-        echo "Error: Configuration file '$CONFIG_FILE' not found."
-        exit 1
-    fi
-fi
+	CDPATH='' cd -P -- "${here}" && pwd
+)
 
-# Get current timestamp
-get_timestamp() {
-    date "+%Y-%m-%d %H:%M:%S"
+# absolute_path PATH
+# Print PATH with its directory resolved, so a lock name cannot depend
+# on the working directory a cron entry happens to start in.
+absolute_path() (
+	dir="$(dirname -- "${1}")"
+	base="$(basename -- "${1}")"
+	root="$(CDPATH='' cd -P -- "${dir}" && pwd)" || return 1
+
+	printf '%s/%s\n' "${root%/}" "${base}"
+)
+
+# timestamp
+# Print the local time in the format 0.1.0 wrote.
+timestamp() (
+	date '+%Y-%m-%d %H:%M:%S'
+)
+
+# compact
+# Fold stdin onto one line, squeeze blanks, cut it to ${OUTPUT_LIMIT}.
+compact() (
+	tr '\n\r\t' '   ' | tr -s ' ' | sed 's/^ //; s/ $//' |
+		cut -c "1-${OUTPUT_LIMIT}"
+)
+
+# log_txt LEVEL PATH STATUS MESSAGE
+# Print one line in the text format 0.1.0 wrote.
+log_txt() (
+	now="$(timestamp)"
+
+	if [ "${1}" = ERROR ]; then
+		printf '[%s] ERROR: %s Path: %s\n' "${now}" "${4}" "${2}"
+		return 0
+	fi
+	if [ -z "${4}" ]; then
+		printf '[%s] %s: %s - %s\n' "${now}" "${1}" "${2}" "${3}"
+		return 0
+	fi
+	printf '[%s] %s: %s - %s (%s)\n' "${now}" "${1}" "${2}" "${3}" "${4}"
+)
+
+# log_json LEVEL PATH STATUS MESSAGE
+# Print one JSON object; one awk function escapes every field.
+log_json() (
+	now="$(timestamp)"
+
+	printf '%s\t%s\t%s\t%s\t%s' "${now}" "${1}" "${2}" "${3}" "${4}" |
+		awk -F '\t' '
+		function esc(s,    out, c, i)
+		{
+			out = ""
+			for (i = 1; i <= length(s); i++) {
+				c = substr(s, i, 1)
+				if (c == "\"" || c == "\\")
+					out = out "\\" c
+				else if (c < " ")
+					out = out " "
+				else
+					out = out c
+			}
+			return out
+		}
+		{
+			line = "{\"timestamp\":\"" esc($1) "\""
+			line = line ",\"type\":\"" esc($2) "\""
+			line = line ",\"path\":\"" esc($3) "\""
+			line = line ",\"status\":\"" esc($4) "\""
+			if ($5 != "")
+				line = line ",\"message\":\"" esc($5) "\""
+			print line "}"
+		}'
+)
+
+# log LEVEL PATH STATUS MESSAGE
+# Emit one line in ${LOG_FORMAT} on stdout and, when set, in ${LOG_FILE}.
+log() (
+	message="$(printf '%s' "${4}" | compact)"
+
+	if [ "${LOG_FORMAT}" = JSON ]; then
+		line="$(log_json "${1}" "${2}" "${3}" "${message}")"
+	else
+		line="$(log_txt "${1}" "${2}" "${3}" "${message}")"
+	fi
+	printf '%s\n' "${line}"
+	if [ -n "${LOG_FILE}" ]; then
+		printf '%s\n' "${line}" >> "${LOG_FILE}"
+	fi
+)
+
+# verbose LEVEL MESSAGE
+# Print "[LEVEL] MESSAGE" on stdout, but only under --verbose.
+verbose() (
+	if [ "${VERBOSE}" != yes ]; then
+		return 0
+	fi
+	printf '[%s] %s\n' "${1}" "${2}"
+)
+
+# git_is_repo PATH
+# Returns 0 when PATH is a work tree, a linked worktree, or bare.
+# --resolve-git-dir takes its path as the option value, so no -- here.
+git_is_repo() (
+	if git rev-parse --resolve-git-dir "${1}/.git" > /dev/null 2>&1; then
+		return 0
+	fi
+	git rev-parse --resolve-git-dir "${1}" > /dev/null 2>&1
+)
+
+# git_is_bare PATH
+# Returns 0 when PATH is a bare or mirror repository.
+git_is_bare() (
+	bare="$(git -C "${1}" rev-parse --is-bare-repository 2>&1)"
+
+	[ "${bare}" = true ]
+)
+
+# git_dirty PATH
+# Returns 0 when PATH has staged or unstaged changes to tracked files.
+git_dirty() (
+	changes="$(git -C "${1}" status --porcelain --untracked-files=no 2>&1)"
+
+	[ -n "${changes}" ]
+)
+
+# git_run PATH ARGS...
+# Run git ARGS inside PATH, under timeout(1) when it exists.
+# Prints git's output and stderr; returns git's status.
+git_run() (
+	path="${1}"
+	shift
+
+	cd -- "${path}" || return 1
+	if [ -n "${TIMEOUT_CMD}" ]; then
+		"${TIMEOUT_CMD}" "${GIT_TIMEOUT}" git "$@" 2>&1
+		return "$?"
+	fi
+	git "$@" 2>&1
+)
+
+# git_fetch PATH
+# Fetch every remote in PATH, pruning gone refs and taking tags.
+git_fetch() (
+	git_run "${1}" fetch --all --prune --tags
+)
+
+# git_pull PATH
+# Pull PATH with --ff-only, so a run can never create a merge commit.
+git_pull() (
+	git_run "${1}" pull --ff-only
+)
+
+# discover_repos PATH
+# Print every repository at PATH or one level below it, one per line.
+# Work trees, linked worktrees and bare mirrors all come out the same.
+discover_repos() (
+	base="${1%/}"
+
+	if [ -z "${base}" ]; then
+		base=/
+	fi
+	if git_is_repo "${base}"; then
+		printf '%s\n' "${base}"
+		return 0
+	fi
+	for entry in "${base}"/*; do
+		if [ -d "${entry}" ] && git_is_repo "${entry}"; then
+			printf '%s\n' "${entry}"
+		fi
+	done
+)
+
+# mode_verb MODE
+# Print the git subcommand MODE runs, for the log message.
+mode_verb() (
+	printf '%s' "${1}" | tr '[:upper:]' '[:lower:]'
+)
+
+# do_fetch REPO
+# Fetch REPO. Returns 0 fetched, 2 git error; prints git's output.
+do_fetch() (
+	if git_fetch "${1}"; then
+		return 0
+	fi
+	return 2
+)
+
+# do_pull REPO
+# Pull REPO with --ff-only; a bare repo or a dirty work tree is skipped.
+# Returns 0 pulled, 1 skipped, 2 git error; prints the reason or output.
+do_pull() (
+	if git_is_bare "${1}"; then
+		printf 'bare repository\n'
+		return 1
+	fi
+	if git_dirty "${1}"; then
+		printf 'working tree is dirty\n'
+		return 1
+	fi
+	if git_pull "${1}"; then
+		return 0
+	fi
+	return 2
+)
+
+# run_mode MODE REPO
+# Dispatch MODE to its handler; a new mode means one arm here.
+run_mode() (
+	case "${1}" in
+	FETCH)
+		do_fetch "${2}"
+		;;
+	PULL)
+		do_pull "${2}"
+		;;
+	*)
+		printf 'unknown mode: %s\n' "${1}"
+		return 2
+		;;
+	esac
+)
+
+# process_repo MODE REPO
+# Run MODE on REPO and log exactly one line about the outcome.
+# Returns 0 done, 1 skipped, 2 failed.
+process_repo() (
+	verb="$(mode_verb "${1}")"
+
+	if [ "${DRY_RUN}" = yes ]; then
+		log "${1}" "${2}" 'Success (Dry Run)' \
+			"Would execute 'git ${verb}'"
+		return 0
+	fi
+	output="$(run_mode "${1}" "${2}")"
+	result="$?"
+	if [ "${result}" -eq 0 ]; then
+		log "${1}" "${2}" Success "${output}"
+		return 0
+	fi
+	if [ "${result}" -eq 1 ]; then
+		log WARN "${2}" Skipped "${output}"
+		return 1
+	fi
+	log ERROR "${2}" Failed \
+		"Failed to execute git ${verb}: ${output}"
+	return 2
+)
+
+# process_repos MODE PATH
+# Run MODE on every repository discovered under PATH.
+process_repos() (
+	verbose INFO "Processing ${1} operation for path: ${2}"
+	repos="$(discover_repos "${2}")"
+
+	if [ -z "${repos}" ]; then
+		log ERROR "${2}" Failed 'No Git repositories found'
+		return 2
+	fi
+	printf '%s\n' "${repos}" |
+		while IFS= read -r repo; do
+			process_repo "${1}" "${repo}"
+		done
+)
+
+# run_section MODE
+# Run MODE on every path its section of the config lists.
+run_section() (
+	section_values "${1}" path |
+		while IFS= read -r path; do
+			verbose INFO "Found ${1} path: ${path}"
+			process_repos "${1}" "${path}"
+		done
+)
+
+# run_sections
+# Run every section the config defines, in the order 0.1.0 used.
+run_sections() (
+	for mode in PULL FETCH; do
+		run_section "${mode}"
+	done
+)
+
+# resolve_config FILE
+# Print FILE, or FILE inside the script's directory; nothing if neither
+# exists, which is how the caller learns the config is missing.
+resolve_config() (
+	if [ -f "${1}" ]; then
+		printf '%s\n' "${1}"
+		return 0
+	fi
+	if [ -f "${SCRIPT_DIR}/${1}" ]; then
+		printf '%s\n' "${SCRIPT_DIR}/${1}"
+		return 0
+	fi
+	return 1
+)
+
+# parse_ini FILE
+# Print FILE as a normalized "section<TAB>key<TAB>value" stream. A bare
+# absolute path becomes "SECTION<TAB>path<TAB>value", as 0.1.0 read it.
+parse_ini() (
+	awk '
+	/^[[:space:]]*[;#]/ { next }
+	/^[[:space:]]*$/ { next }
+	/^[[:space:]]*\[/ {
+		section = $0
+		sub(/^[[:space:]]*\[/, "", section)
+		sub(/\].*$/, "", section)
+		section = toupper(section)
+		next
+	}
+	section == "" { next }
+	{
+		eq = index($0, "=")
+		key = "path"
+		value = $0
+		if (eq > 0) {
+			key = substr($0, 1, eq - 1)
+			value = substr($0, eq + 1)
+		}
+		sub(/^[[:space:]]+/, "", key)
+		sub(/[[:space:]]+$/, "", key)
+		sub(/^[[:space:]]+/, "", value)
+		sub(/[[:space:]]+$/, "", value)
+		if (value == "")
+			next
+		if (eq <= 0 && substr(value, 1, 1) != "/")
+			next
+		printf "%s\t%s\t%s\n", section, tolower(key), value
+	}' < "${1}"
+)
+
+# section_values SECTION KEY
+# Print the values KEY holds in SECTION, one per line, in file order.
+# Reads the stream parse_ini built, never the INI file (CLAUDE.md 3.4).
+section_values() (
+	printf '%s\n' "${INI_STREAM}" |
+		awk -F '\t' -v section="${1}" -v key="${2}" \
+			'$1 == section && $2 == key { print $3 }'
+)
+
+# apply_settings
+# Set LOG_FORMAT from [SETTINGS]; an unknown value stays TXT.
+# Mutates global state on purpose (CLAUDE.md 3.2).
+apply_settings() {
+	# awk takes the first word, so "JSON  # a comment" still reads as
+	# JSON, the way 0.1.0's regexp did.
+	format="$(section_values SETTINGS log_format | head -n 1 |
+		awk '{ print $1 }')"
+	format="$(printf '%s' "${format}" | tr '[:lower:]' '[:upper:]')"
+	case "${format}" in
+	TXT | JSON)
+		LOG_FORMAT="${format}"
+		;;
+	*)
+		# Anything else, the empty string included, stays TXT.
+		;;
+	esac
 }
 
-# Log operations in TXT format
-log_txt() {
-    local timestamp=$(get_timestamp)
-    local type="$1"
-    local path="$2"
-    local status="$3"
-    local message="$4"
-    
-    if [ "$type" = "ERROR" ]; then
-        echo "[$timestamp] ERROR: $message Path: $path"
-    else
-        if [ -z "$message" ]; then
-            echo "[$timestamp] $type: $path - $status"
-        else
-            echo "[$timestamp] $type: $path - $status ($message)"
-        fi
-    fi
+# lock_path CONFIG
+# Print the lock directory for CONFIG, under ${TMPDIR:-/tmp}.
+lock_path() (
+	sum="$(printf '%s' "${1}" | cksum)"
+
+	printf '%s/%s-%s.lock\n' "${TMPDIR:-/tmp}" "${PROGRAM_NAME}" \
+		"${sum%% *}"
+)
+
+# lock_is_stale PATH
+# Returns 0 when PATH's owning process is gone or left no pid behind.
+lock_is_stale() (
+	pid="$(cat -- "${1}/pid" 2> /dev/null)"
+
+	if [ -z "${pid}" ]; then
+		return 0
+	fi
+	if kill -0 "${pid}" 2> /dev/null; then
+		return 1
+	fi
+	return 0
+)
+
+# lock_acquire PATH
+# Take PATH as a lock directory, reclaiming it from a dead run.
+# Returns 0 taken, 3 held by a live run.
+lock_acquire() (
+	if mkdir -- "${1}" 2> /dev/null; then
+		printf '%s\n' "$$" > "${1}/pid"
+		return 0
+	fi
+	if ! lock_is_stale "${1}"; then
+		return "${EXIT_LOCKED}"
+	fi
+	warn "reclaiming the stale lock ${1}"
+	rm -f -- "${1}/pid"
+	lock_reclaim "${1}"
+)
+
+# lock_reclaim PATH
+# Replace the stale lock directory PATH with one owned by this run.
+lock_reclaim() (
+	rmdir -- "${1}" 2> /dev/null
+	if ! mkdir -- "${1}" 2> /dev/null; then
+		return "${EXIT_LOCKED}"
+	fi
+	printf '%s\n' "$$" > "${1}/pid"
+)
+
+# lock_release PATH
+# Remove the lock directory PATH; safe when it is already gone.
+lock_release() (
+	if [ -z "${1}" ]; then
+		return 0
+	fi
+	rm -f -- "${1}/pid"
+	rmdir -- "${1}" 2> /dev/null
+	return 0
+)
+
+# set_option FLAG VALUE
+# Apply FLAG; VALUE belongs to it when the flag takes one.
+# Mutates global state on purpose (CLAUDE.md 3.2).
+set_option() {
+	case "${1}" in
+	--config)
+		if [ -z "${2}" ]; then
+			die "${EXIT_USAGE}" "${1} needs a file"
+		fi
+		CONFIG_FILE="${2}"
+		;;
+	--log-file)
+		if [ -z "${2}" ]; then
+			die "${EXIT_USAGE}" "${1} needs a file"
+		fi
+		LOG_FILE="${2}"
+		;;
+	--dry-run)
+		DRY_RUN=yes
+		;;
+	--verbose | -v)
+		VERBOSE=yes
+		;;
+	*)
+		die "${EXIT_USAGE}" "unknown option: ${1}"
+		;;
+	esac
 }
 
-# Log operations in JSON format
-log_json() {
-    local timestamp=$(get_timestamp)
-    local type="$1"
-    local path="$2"
-    local status="$3"
-    local message="$4"
-    
-    if [ -z "$message" ]; then
-        echo "{\"timestamp\":\"$timestamp\",\"type\":\"$type\",\"path\":\"$path\",\"status\":\"$status\"}"
-    else
-        echo "{\"timestamp\":\"$timestamp\",\"type\":\"$type\",\"path\":\"$path\",\"status\":\"$status\",\"message\":\"$message\"}"
-    fi
+# parse_args ARGS...
+# Set CONFIG_FILE, DRY_RUN, LOG_FILE and VERBOSE from ARGS.
+# Mutates global state on purpose; the name is fixed by CLAUDE.md 4.
+parse_args() {
+	while [ "$#" -gt 0 ]; do
+		case "${1}" in
+		--help)
+			usage
+			exit "${EXIT_OK}"
+			;;
+		--version)
+			printf '%s\n' "${VERSION}"
+			exit "${EXIT_OK}"
+			;;
+		--config | --log-file)
+			set_option "${1}" "${2:-}"
+			shift 2
+			;;
+		--dry-run | --verbose | -v)
+			set_option "${1}" ''
+			shift
+			;;
+		*)
+			warn "unknown option: ${1}"
+			usage >&2
+			exit "${EXIT_USAGE}"
+			;;
+		esac
+	done
 }
 
-# Log an operation
-log_operation() {
-    local type="$1"
-    local path="$2"
-    local status="$3"
-    local message="$4"
-    
-    local log_message=""
-    if [ "$LOG_FORMAT" = "JSON" ]; then
-        log_message=$(log_json "$type" "$path" "$status" "$message")
-    else
-        log_message=$(log_txt "$type" "$path" "$status" "$message")
-    fi
-    
-    # Print to console
-    echo "$log_message"
-    
-    # Write to log file if specified (ONLY to the centralized log file, not in individual repositories)
-    if [ -n "$LOG_FILE" ]; then
-        echo "$log_message" >> "$LOG_FILE"
-    fi
+# main ARGS...
+# Parse the arguments and the config, take the lock, run every section.
+# A no-op when AUTOGIT_LIB=1, so tests can source this file.
+main() {
+	if [ "${AUTOGIT_LIB:-0}" = 1 ]; then
+		return 0
+	fi
+	parse_args "$@"
+	SCRIPT_DIR="$(script_directory)"
+	config_file="$(resolve_config "${CONFIG_FILE}")"
+	if [ -z "${config_file}" ]; then
+		die "${EXIT_USAGE}" "configuration file not found: ${CONFIG_FILE}"
+	fi
+	CONFIG_FILE="$(absolute_path "${config_file}")"
+	verbose INFO "Using configuration file: ${CONFIG_FILE}"
+	INI_STREAM="$(parse_ini "${CONFIG_FILE}")"
+	apply_settings
+	TIMEOUT_CMD="$(command -v timeout 2> /dev/null)"
+	if [ -z "${TIMEOUT_CMD}" ]; then
+		warn 'timeout(1) not found: a git call can hang'
+	fi
+	LOCK_PATH="$(lock_path "${CONFIG_FILE}")"
+	if ! lock_acquire "${LOCK_PATH}"; then
+		die "${EXIT_LOCKED}" "another run holds ${LOCK_PATH}"
+	fi
+	trap 'lock_release "${LOCK_PATH}"' EXIT HUP INT TERM
+	run_sections
+	lock_release "${LOCK_PATH}"
+	return "${EXIT_OK}"
 }
 
-# Log an error
-log_error() {
-    local path="$1"
-    local message="$2"
-    
-    log_operation "ERROR" "$path" "Failed" "$message"
-}
-
-# Check if a directory is a Git repository
-is_git_repository() {
-    local path="$1"
-    
-    if [ -d "$path/.git" ]; then
-        return 0  # True in bash
-    else
-        return 1  # False in bash
-    fi
-}
-
-# Verbose log function
-verbose_log() {
-    local message="$1"
-    local level="${2:-INFO}"
-    
-    if $VERBOSE; then
-        case "$level" in
-            "INFO")
-                echo "[INFO] $message"
-                ;;
-            "DEBUG")
-                echo "[DEBUG] $message"
-                ;;
-            "WARN")
-                echo "[WARNING] $message"
-                ;;
-            *)
-                echo "[INFO] $message"
-                ;;
-        esac
-    fi
-}
-
-# Execute a Git command
-execute_git_command() {
-    local path="$1"
-    local command="$2"
-    
-    # Check if directory exists
-    if [ ! -d "$path" ]; then
-        log_error "$path" "Directory does not exist"
-        return 1
-    fi
-    
-    # Check if it's a Git repository
-    if ! is_git_repository "$path"; then
-        log_error "$path" "Not a Git repository"
-        return 1
-    fi
-    
-    # If verbose mode, print additional info
-    if $VERBOSE; then
-        verbose_log "Executing 'git $command' in: $path"
-    fi
-    
-    # If dry run, just log what would happen
-    if $DRY_RUN; then
-        log_operation "${command^^}" "$path" "Success (Dry Run)" "Would execute 'git $command'"
-        return 0
-    fi
-    
-    # Execute the Git command
-    pushd "$path" > /dev/null
-    if output=$(git "$command" 2>&1); then
-        log_operation "${command^^}" "$path" "Success" "$output"
-        if $VERBOSE && [ -n "$output" ]; then
-            # Show a more concise version of the output if it's too long
-            if [ ${#output} -gt 150 ]; then
-                verbose_log "${output:0:147}..." "DEBUG"
-            else
-                verbose_log "$output" "DEBUG"
-            fi
-        fi
-        popd > /dev/null
-        return 0
-    else
-        log_error "$path" "Failed to execute git $command: $output"
-        if $VERBOSE; then
-            verbose_log "Command failed with error" "WARN"
-            verbose_log "$output" "DEBUG"
-        fi
-        popd > /dev/null
-        return 1
-    fi
-}
-
-# Scan for Git repositories in a base path and its immediate subdirectories
-scan_for_repositories() {
-    local base_path="$1"
-    local repositories=()
-    
-    # Remove trailing slash from base_path if present
-    base_path="${base_path%/}"
-    
-    # Check if the base path itself is a Git repository
-    if is_git_repository "$base_path"; then
-        if $VERBOSE; then
-            verbose_log "Found Git repository: $base_path" >&2
-        fi
-        repositories+=("$base_path")
-        echo "$base_path"
-        return 0
-    fi
-    
-    # If the base path is not a repository, check immediate subdirectories
-    if [ -d "$base_path" ]; then
-        if $VERBOSE; then
-            verbose_log "Scanning subdirectories in: $base_path" >&2
-        fi
-        
-        # Count the number of repositories found
-        local found_count=0
-        
-        for subdir in "$base_path"/*; do
-            if [ -d "$subdir" ]; then
-                if is_git_repository "$subdir"; then
-                    if $VERBOSE && [ $found_count -lt 5 ]; then
-                        # Only log the first 5 repositories to avoid cluttering output
-                        verbose_log "Found Git repository: $subdir" >&2
-                    elif $VERBOSE && [ $found_count -eq 5 ]; then
-                        verbose_log "More repositories found... (truncating verbose output)" >&2
-                    fi
-                    found_count=$((found_count + 1))
-                    repositories+=("$subdir")
-                    echo "$subdir"
-                fi
-            fi
-        done
-        
-        if $VERBOSE && [ $found_count -gt 0 ]; then
-            verbose_log "Total repositories found: $found_count" >&2
-        fi
-    fi
-    
-    # Return nothing if no repositories found
-    if [ ${#repositories[@]} -eq 0 ]; then
-        if $VERBOSE; then
-            verbose_log "No Git repositories found in: $base_path" "WARN" >&2
-        fi
-        return 0
-    fi
-}
-
-# Process Git operations on repositories
-process_repositories() {
-    local operation="$1"
-    local path="$2"
-    
-    if $VERBOSE; then
-        verbose_log "Processing $operation operation for path: $path"
-    fi
-    
-    # Get repositories
-    mapfile -t repositories < <(scan_for_repositories "$path")
-    
-    if [ ${#repositories[@]} -eq 0 ]; then
-        log_error "$path" "No Git repositories found"
-        return 1
-    fi
-    
-    # Log repository count in verbose mode
-    if $VERBOSE; then
-        verbose_log "Found ${#repositories[@]} Git repositories to process"
-    fi
-    
-    # Execute Git operation on each repository
-    for repo in "${repositories[@]}"; do
-        # Skip empty lines
-        if [ -z "$repo" ]; then
-            continue
-        fi
-        execute_git_command "$repo" "${operation,,}"  # Convert operation to lowercase
-    done
-}
-
-# Read settings from the configuration file
-if grep -q "^\[SETTINGS\]" "$CONFIG_FILE"; then
-    log_format_line=$(grep -A 10 "^\[SETTINGS\]" "$CONFIG_FILE" | grep "^log_format" | head -n 1)
-    if [[ $log_format_line =~ ^log_format[[:space:]]*=[[:space:]]*([[:alnum:]]+) ]]; then
-        LOG_FORMAT="${BASH_REMATCH[1]^^}"  # Convert to uppercase
-        if [ "$LOG_FORMAT" != "TXT" ] && [ "$LOG_FORMAT" != "JSON" ]; then
-            LOG_FORMAT="TXT"  # Default to TXT if invalid format
-        fi
-    fi
-fi
-
-# Process PULL operations
-if grep -q "^\[PULL\]" "$CONFIG_FILE"; then
-    # Debug: Dump PULL section content
-    if $VERBOSE; then
-        verbose_log "Debug: Content of [PULL] section:"
-        pull_section=$(sed -n '/^\[PULL\]/,/^\[/p' "$CONFIG_FILE" | grep -v "^\[PULL\]" | grep -v "^\[")
-        while IFS= read -r line; do
-            verbose_log "  $line"
-        done <<< "$pull_section"
-    fi
-    
-    # Try to read paths with "path =" prefix first
-    paths=$(sed -n '/^\[PULL\]/,/^\[/p' "$CONFIG_FILE" | grep -v "^\[PULL\]" | grep -v "^\[" | grep "^path" | sed 's/^path[[:space:]]*=[[:space:]]*//')
-    
-    # If no paths with prefix were found, try to read direct paths
-    if [ -z "$paths" ]; then
-        if $VERBOSE; then
-            verbose_log "No 'path =' entries found in [PULL] section, trying direct paths"
-        fi
-        # Fix: Use a better approach to extract direct paths that start with /
-        paths=$(sed -n '/^\[PULL\]/,/^\[/p' "$CONFIG_FILE" | grep -v "^\[PULL\]" | grep -v "^\[" | grep -v "^;" | grep -v "^$" | grep "^/" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        
-        # Debug extracted paths
-        if $VERBOSE; then
-            verbose_log "Debug: extracted paths from [PULL] section: '$paths'"
-        fi
-    fi
-    
-    if [ -z "$paths" ]; then
-        if $VERBOSE; then
-            verbose_log "No paths found in [PULL] section"
-        fi
-    else
-        for path in $paths; do
-            if $VERBOSE; then
-                verbose_log "Found PULL path: $path"
-            fi
-            process_repositories "PULL" "$path"
-        done
-    fi
-fi
-
-# Process FETCH operations
-if grep -q "^\[FETCH\]" "$CONFIG_FILE"; then
-    # Debug: Dump FETCH section content
-    if $VERBOSE; then
-        verbose_log "Debug: Content of [FETCH] section:"
-        fetch_section=$(sed -n '/^\[FETCH\]/,/^\[/p' "$CONFIG_FILE" | grep -v "^\[FETCH\]" | grep -v "^\[")
-        while IFS= read -r line; do
-            verbose_log "  $line"
-        done <<< "$fetch_section"
-    fi
-    
-    # Try to read paths with "path =" prefix first
-    paths=$(sed -n '/^\[FETCH\]/,/^\[/p' "$CONFIG_FILE" | grep -v "^\[FETCH\]" | grep -v "^\[" | grep "^path" | sed 's/^path[[:space:]]*=[[:space:]]*//')
-    
-    # If no paths with prefix were found, try to read direct paths
-    if [ -z "$paths" ]; then
-        if $VERBOSE; then
-            verbose_log "No 'path =' entries found in [FETCH] section, trying direct paths"
-        fi
-        # Fix: Use a better approach to extract direct paths that start with /
-        paths=$(sed -n '/^\[FETCH\]/,/^\[/p' "$CONFIG_FILE" | grep -v "^\[FETCH\]" | grep -v "^\[" | grep -v "^;" | grep -v "^$" | grep "^/" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        
-        # Debug extracted paths
-        if $VERBOSE; then
-            verbose_log "Debug: extracted paths from [FETCH] section: '$paths'"
-        fi
-    fi
-    
-    if [ -z "$paths" ]; then
-        if $VERBOSE; then
-            verbose_log "No paths found in [FETCH] section"
-        fi
-    else
-        for path in $paths; do
-            if $VERBOSE; then
-                verbose_log "Found FETCH path: $path"
-            fi
-            process_repositories "FETCH" "$path"
-        done
-    fi
-fi
-
-exit 0
+main "$@"

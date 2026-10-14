@@ -1,0 +1,82 @@
+# Every job runs the same `just` recipe a developer runs locally
+# (CLAUDE.md §6). Actions are pinned by commit SHA; Dependabot bumps
+# them.
+name: ci
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install shellcheck, checkbashisms and shfmt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            shellcheck devscripts shfmt
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - run: just lint
+
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: ["sh", "dash", "bash --posix", "busybox sh"]
+    name: test (${{ matrix.shell }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install bats, jq and the shells under test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bats jq dash busybox-static
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - run: just test '${{ matrix.shell }}'
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install kcov, bats and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends kcov bats jq
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+      - run: just coverage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test, coverage]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assert --version matches the tag
+        run: |
+          version="$(sh ./autogit-o-matic.sh --version)"
+          printf 'tag=%s --version=%s\n' "$GITHUB_REF_NAME" "$version"
+          [ "$GITHUB_REF_NAME" = "v$version" ]
+      - name: Build SHA256SUMS
+        run: sha256sum autogit-o-matic.sh autogit-o-matic.ini.example > SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes \
+            autogit-o-matic.sh autogit-o-matic.ini.example SHA256SUMS
