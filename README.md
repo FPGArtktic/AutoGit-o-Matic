@@ -19,6 +19,16 @@
   <a href="#license">License</a>
 </p>
 
+> **Picked up again after a long quiet.** The Bash version, now tagged
+> `v1.0.0`, sat untouched from May 2025. In October 2026 the project was
+> taken up again: the script was rewritten in POSIX `sh`, every known
+> defect of 1.0.0 was fixed and covered by a test, and it grew a test
+> suite, a lint gate and CI across four shells. Four releases followed —
+> `2.0.0` (the rewrite), `2.1.0` (`SILENT_UPDATE`), `2.2.0` (summary
+> line, `--quiet`, `--jobs N`, `[DEFAULTS]`) and `2.3.0` (`MIRROR` with
+> recursive submodules). See [CHANGELOG.md](CHANGELOG.md) for the
+> details.
+
 ## Features
 
 AutoGit-o-Matic is a single POSIX shell script that automates Git operations across multiple repositories. It helps you:
