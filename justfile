@@ -30,9 +30,11 @@ test-all: (test "sh") (test "dash") (test "bash --posix") (test "busybox sh")
 
 # Line coverage of the script: floor 80 %, target 85 % (CLAUDE.md §5).
 coverage:
-	AUTOGIT_SH=bash kcov --include-pattern=autogit-o-matic.sh --clean coverage bats tests
-	jq -r '"line coverage: \(.percent_covered) % (floor 80, target 85)"' coverage/kcov-merged/coverage.json
-	jq -e '(.percent_covered | tonumber) >= 80' coverage/kcov-merged/coverage.json > /dev/null
+	AUTOGIT_SH=bash kcov --include-path="$PWD/autogit-o-matic.sh" \
+		--exclude-region=kcov-exclude-start:kcov-exclude-stop \
+		--clean "$PWD/coverage" bats tests
+	jq -r '"line coverage: \(.percent_covered) % (floor 80, target 85)"' coverage/bats/coverage.json
+	jq -e '(.percent_covered | tonumber) >= 80' coverage/bats/coverage.json >/dev/null
 
 # The pre-commit gate (CLAUDE.md §10).
 check: lint test-all coverage

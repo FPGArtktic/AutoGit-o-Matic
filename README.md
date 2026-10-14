@@ -84,7 +84,8 @@ Run the script with:
 | `3`  | another run holds the lock for this config   |
 
 A repository that fails is reported as an `ERROR` log line; it does not yet
-change the exit code. That arrives with the summary line in 0.3.0.
+change the exit code. That arrives together with the summary line
+(roadmap item 3).
 
 ### Example
 
@@ -164,7 +165,7 @@ You can specify either individual repositories or parent directories containing 
 ### Path syntax
 
 - A bare line is a path only when it starts with `/`. Anything else on a bare
-  line is ignored, as in 0.1.0.
+  line is ignored, as in 1.0.0.
 - `path = <value>` accepts any value, relative paths included; they are
   resolved against the working directory of the run.
 - Paths containing a tab or a newline are **not supported**: the log and the

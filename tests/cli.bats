@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# cli: the flags v0.1.0 shipped. CLAUDE.md §2.2 freezes them, so this
+# cli: the flags v1.0.0 shipped. CLAUDE.md §2.2 freezes them, so this
 # file is the backward-compatibility suite the POSIX rewrite must keep
 # passing, under every shell in `just test-all`.
 
@@ -18,7 +18,7 @@ setup() {
 	[[ "$output" == *"AutoGit-o-Matic"* ]]
 }
 
-@test "--help documents every flag v0.1.0 accepts" {
+@test "--help documents every flag v1.0.0 accepts" {
 	run_tool --help
 
 	[ "$status" -eq 0 ]
@@ -111,6 +111,20 @@ setup() {
 	grep -q -- "$clone" run.log
 }
 
+@test "--config without a value exits 1" {
+	run_tool --config
+
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"needs a file"* ]]
+}
+
+@test "--log-file without a value exits 1" {
+	run_tool --log-file
+
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"needs a file"* ]]
+}
+
 @test "--version prints the VERSION constant and nothing else" {
 	local declared
 	declared="$(sed -n 's/^VERSION=\(.*\)$/\1/p' "$AUTOGIT")"
@@ -132,7 +146,7 @@ setup() {
 	printf '[PULL]\npath = %s\n' "$clone" > "$bin/autogit-o-matic.ini"
 	cd "$BATS_TEST_TMPDIR/elsewhere" || return 1
 
-	# Defect 1: 0.1.0 called verbose_log here, before defining it.
+	# Defect 1: 1.0.0 called verbose_log here, before defining it.
 	# shellcheck disable=SC2086  # $AUTOGIT_SH may be two words
 	run $AUTOGIT_SH "$bin/autogit-o-matic.sh" --verbose --dry-run
 

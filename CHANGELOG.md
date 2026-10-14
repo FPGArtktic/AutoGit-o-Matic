@@ -5,7 +5,7 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - unreleased
+## [2.0.0] - unreleased
 
 ### Changed
 
@@ -15,7 +15,7 @@ this project adheres to
   gone, and `shellcheck --shell=sh --severity=style --enable=all` is clean.
 - `[PULL]` now runs `git pull --ff-only`, so an unattended run can no
   longer create a merge commit. A diverged branch is reported as an
-  `ERROR` and left alone. **This changes 0.1.0's behaviour on purpose**:
+  `ERROR` and left alone. **This changes 1.0.0's behaviour on purpose**:
   there is no deprecation path for the default operation of a cron job.
 - `[FETCH]` now runs `git fetch --all --prune --tags`, so refs deleted
   upstream disappear locally and new tags arrive.
@@ -46,7 +46,7 @@ this project adheres to
 - A `bats-core` suite. `tests/helper.sh` builds bare remotes and clones
   in `$BATS_TEST_TMPDIR` and runs the script under `$AUTOGIT_SH`;
   `tests/cli.bats` and `tests/log.bats` pin the flags, INI sections and
-  log line formats 0.1.0 shipped, so the POSIX rewrite cannot change
+  log line formats 1.0.0 shipped, so the POSIX rewrite cannot change
   them unnoticed.
 - `.github/workflows/ci.yml`: `lint`, `test` (`sh`, `dash`,
   `bash --posix`, `busybox sh`), `coverage` and `release` jobs, each one
@@ -72,7 +72,7 @@ this project adheres to
   bare or mirror repositories.
 - `[PULL]` and `[FETCH]` were two copies of the same code.
 
-## [0.1.0] - 2025-05-28
+## [1.0.0] - 2025-05-28
 
 ### Added
 
@@ -82,5 +82,5 @@ this project adheres to
 - TXT and JSON Lines log formats, selected by `log_format` in
   `[SETTINGS]`.
 
-[0.2.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/releases/tag/v0.1.0
+[2.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/releases/tag/v1.0.0

@@ -46,10 +46,24 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install kcov, bats and jq
+      - name: Install bats and jq
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends kcov bats jq
+          sudo apt-get install -y --no-install-recommends bats jq
+      # kcov is in Ubuntu up to 22.04 and again from 25.04, but not in
+      # 24.04, so this job builds the version a distribution ships.
+      - name: Build and install kcov
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential binutils-dev libcurl4-openssl-dev \
+            zlib1g-dev libdw-dev libiberty-dev
+          git clone --quiet --depth 1 --branch v43 \
+            https://github.com/SimonKagstrom/kcov.git "$RUNNER_TEMP/kcov"
+          cmake -S "$RUNNER_TEMP/kcov" -B "$RUNNER_TEMP/kcov/build" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/kcov/build" --parallel
+          sudo cmake --install "$RUNNER_TEMP/kcov/build"
+          kcov --version
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

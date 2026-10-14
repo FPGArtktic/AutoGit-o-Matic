@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=0.2.0
+VERSION=2.0.0
 
 set -u
 
@@ -77,7 +77,7 @@ die() {
 }
 
 # script_directory
-# Print the directory holding this script, as 0.1.0 did with BASH_SOURCE.
+# Print the directory holding this script, as 1.0.0 did with BASH_SOURCE.
 script_directory() (
 	here="$(dirname -- "${0}")"
 
@@ -96,7 +96,7 @@ absolute_path() (
 )
 
 # timestamp
-# Print the local time in the format 0.1.0 wrote.
+# Print the local time in the format 1.0.0 wrote.
 timestamp() (
 	date '+%Y-%m-%d %H:%M:%S'
 )
@@ -109,7 +109,7 @@ compact() (
 )
 
 # log_txt LEVEL PATH STATUS MESSAGE
-# Print one line in the text format 0.1.0 wrote.
+# Print one line in the text format 1.0.0 wrote.
 log_txt() (
 	now="$(timestamp)"
 
@@ -131,6 +131,7 @@ log_json() (
 
 	printf '%s\t%s\t%s\t%s\t%s' "${now}" "${1}" "${2}" "${3}" "${4}" |
 		awk -F '\t' '
+		# kcov-exclude-start: awk source, not shell lines
 		function esc(s,    out, c, i)
 		{
 			out = ""
@@ -153,7 +154,9 @@ log_json() (
 			if ($5 != "")
 				line = line ",\"message\":\"" esc($5) "\""
 			print line "}"
-		}'
+		}
+		# kcov-exclude-stop
+		'
 )
 
 # log LEVEL PATH STATUS MESSAGE
@@ -168,7 +171,7 @@ log() (
 	fi
 	printf '%s\n' "${line}"
 	if [ -n "${LOG_FILE}" ]; then
-		printf '%s\n' "${line}" >> "${LOG_FILE}"
+		printf '%s\n' "${line}" >>"${LOG_FILE}"
 	fi
 )
 
@@ -185,10 +188,10 @@ verbose() (
 # Returns 0 when PATH is a work tree, a linked worktree, or bare.
 # --resolve-git-dir takes its path as the option value, so no -- here.
 git_is_repo() (
-	if git rev-parse --resolve-git-dir "${1}/.git" > /dev/null 2>&1; then
+	if git rev-parse --resolve-git-dir "${1}/.git" >/dev/null 2>&1; then
 		return 0
 	fi
-	git rev-parse --resolve-git-dir "${1}" > /dev/null 2>&1
+	git rev-parse --resolve-git-dir "${1}" >/dev/null 2>&1
 )
 
 # git_is_bare PATH
@@ -357,7 +360,7 @@ run_section() (
 )
 
 # run_sections
-# Run every section the config defines, in the order 0.1.0 used.
+# Run every section the config defines, in the order 1.0.0 used.
 run_sections() (
 	for mode in PULL FETCH; do
 		run_section "${mode}"
@@ -381,9 +384,10 @@ resolve_config() (
 
 # parse_ini FILE
 # Print FILE as a normalized "section<TAB>key<TAB>value" stream. A bare
-# absolute path becomes "SECTION<TAB>path<TAB>value", as 0.1.0 read it.
+# absolute path becomes "SECTION<TAB>path<TAB>value", as 1.0.0 read it.
 parse_ini() (
 	awk '
+	# kcov-exclude-start: awk source, not shell lines
 	/^[[:space:]]*[;#]/ { next }
 	/^[[:space:]]*$/ { next }
 	/^[[:space:]]*\[/ {
@@ -411,7 +415,9 @@ parse_ini() (
 		if (eq <= 0 && substr(value, 1, 1) != "/")
 			next
 		printf "%s\t%s\t%s\n", section, tolower(key), value
-	}' < "${1}"
+	}
+	# kcov-exclude-stop
+	' <"${1}"
 )
 
 # section_values SECTION KEY
@@ -428,7 +434,7 @@ section_values() (
 # Mutates global state on purpose (CLAUDE.md 3.2).
 apply_settings() {
 	# awk takes the first word, so "JSON  # a comment" still reads as
-	# JSON, the way 0.1.0's regexp did.
+	# JSON, the way 1.0.0's regexp did.
 	format="$(section_values SETTINGS log_format | head -n 1 |
 		awk '{ print $1 }')"
 	format="$(printf '%s' "${format}" | tr '[:lower:]' '[:upper:]')"
@@ -454,12 +460,12 @@ lock_path() (
 # lock_is_stale PATH
 # Returns 0 when PATH's owning process is gone or left no pid behind.
 lock_is_stale() (
-	pid="$(cat -- "${1}/pid" 2> /dev/null)"
+	pid="$(cat -- "${1}/pid" 2>/dev/null)"
 
 	if [ -z "${pid}" ]; then
 		return 0
 	fi
-	if kill -0 "${pid}" 2> /dev/null; then
+	if kill -0 "${pid}" 2>/dev/null; then
 		return 1
 	fi
 	return 0
@@ -469,8 +475,8 @@ lock_is_stale() (
 # Take PATH as a lock directory, reclaiming it from a dead run.
 # Returns 0 taken, 3 held by a live run.
 lock_acquire() (
-	if mkdir -- "${1}" 2> /dev/null; then
-		printf '%s\n' "$$" > "${1}/pid"
+	if mkdir -- "${1}" 2>/dev/null; then
+		printf '%s\n' "$$" >"${1}/pid"
 		return 0
 	fi
 	if ! lock_is_stale "${1}"; then
@@ -484,11 +490,11 @@ lock_acquire() (
 # lock_reclaim PATH
 # Replace the stale lock directory PATH with one owned by this run.
 lock_reclaim() (
-	rmdir -- "${1}" 2> /dev/null
-	if ! mkdir -- "${1}" 2> /dev/null; then
+	rmdir -- "${1}" 2>/dev/null
+	if ! mkdir -- "${1}" 2>/dev/null; then
 		return "${EXIT_LOCKED}"
 	fi
-	printf '%s\n' "$$" > "${1}/pid"
+	printf '%s\n' "$$" >"${1}/pid"
 )
 
 # lock_release PATH
@@ -498,7 +504,7 @@ lock_release() (
 		return 0
 	fi
 	rm -f -- "${1}/pid"
-	rmdir -- "${1}" 2> /dev/null
+	rmdir -- "${1}" 2>/dev/null
 	return 0
 )
 
@@ -579,7 +585,7 @@ main() {
 	verbose INFO "Using configuration file: ${CONFIG_FILE}"
 	INI_STREAM="$(parse_ini "${CONFIG_FILE}")"
 	apply_settings
-	TIMEOUT_CMD="$(command -v timeout 2> /dev/null)"
+	TIMEOUT_CMD="$(command -v timeout 2>/dev/null)"
 	if [ -z "${TIMEOUT_CMD}" ]; then
 		warn 'timeout(1) not found: a git call can hang'
 	fi

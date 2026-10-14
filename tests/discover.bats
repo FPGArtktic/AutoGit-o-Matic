@@ -106,9 +106,9 @@ pull_lines() {
 }
 
 @test "a repository excluded by a glob is left alone" {
-	skip 'exclude globs arrive with v0.3.0 (CLAUDE.md §5)'
+	skip 'exclude globs are not implemented yet (CLAUDE.md §5)'
 }
 
 @test "max_depth bounds the scan" {
-	skip 'max_depth arrives with v0.3.0 (CLAUDE.md §5)'
+	skip 'max_depth is not implemented yet (CLAUDE.md §5)'
 }
