@@ -72,5 +72,5 @@ setup() {
 }
 
 @test "a failed repository makes the run exit 2" {
-	skip 'the exit-code contract is roadmap item 3 (CLAUDE.md §3.5)'
+	skip 'the exit-code contract is not implemented yet (CLAUDE.md §3.5)'
 }

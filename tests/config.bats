@@ -107,9 +107,9 @@ setup() {
 }
 
 @test "[DEFAULTS] overrides a section's settings" {
-	skip '[DEFAULTS] is roadmap item 3 (CLAUDE.md §5)'
+	skip '[DEFAULTS] is not implemented yet (CLAUDE.md §5)'
 }
 
 @test "per-repo git config autogit.* is honoured" {
-	skip 'per-repo config is roadmap item 3 (CLAUDE.md §5)'
+	skip 'per-repo config is not implemented yet (CLAUDE.md §5)'
 }
