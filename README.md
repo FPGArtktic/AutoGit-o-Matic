@@ -30,6 +30,7 @@ AutoGit-o-Matic is a single POSIX shell script that automates Git operations acr
 - **Configurable paths** via an INI file
 - **Safe unattended pulls**: `git pull --ff-only`, so a run can never leave a merge commit behind
 - **Silent updates**: fast-forward branches nobody has checked out, without ever touching a work tree
+- **Mirrors for air-gapped transfer**: `clone --mirror`, pruning updates, and submodules followed through `.gitmodules`
 - **One run at a time** per configuration file, so overlapping cron jobs cannot collide
 - **No hanging on credentials**: `GIT_TERMINAL_PROMPT=0` is always set, and each git call is bounded by `timeout(1)` when it is installed
 
@@ -208,7 +209,8 @@ You can specify either individual repositories or parent directories containing 
 | `[SETTINGS]`     | `log_format = TXT` or `JSON`, and `exit_on_failure = yes` to opt into exit code `2`. An inline `# comment` after the value is ignored. |
 | `[PULL]`         | `git pull --ff-only`. A bare repository or a dirty work tree is skipped with a `WARN`. |
 | `[FETCH]`        | `git fetch --all --prune --tags`.                                         |
-| `[DEFAULTS]`     | Option values every repository inherits: `exclude`, `max_depth`, `ssh_key`, `timeout`. |
+| `[DEFAULTS]`     | Option values every repository inherits: `exclude`, `max_depth`, `ssh_key`, `timeout`, `mirror_dir`, `fsck`, `verify_tags`. |
+| `[MIRROR]`       | `git clone --mirror` the first time, `git remote update --prune` after that, into `mirror_dir`. Submodules named in `.gitmodules` are mirrored too, recursively. |
 | `[SILENT_UPDATE]`| `git fetch`, then `git branch -f` for every branch that tracks a remote, is behind it, and is not checked out in the repository or in any of its worktrees. Nothing is merged and no work tree is touched. A bare repository is skipped. |
 
 Unknown sections are ignored, and section names are case insensitive.
@@ -231,6 +233,9 @@ timeout = 120
 | `max_depth` | How far below a configured path discovery looks. `0` is the path itself, `1` (the default) one level down. |
 | `ssh_key`   | Becomes `GIT_SSH_COMMAND=ssh -i <key> -o IdentitiesOnly=yes` for that repository's git calls. |
 | `timeout`   | Seconds one git call may take, when `timeout(1)` is installed. Default 300. |
+| `mirror_dir`| Where `[MIRROR]` keeps its mirrors. Required by that section; without it every mirror is skipped. |
+| `fsck`      | `yes` runs `git fsck --connectivity-only` on a mirror after each update. |
+| `verify_tags`| `yes` verifies every *signed* tag in a mirror after each update. Unsigned tags are not checked. |
 
 A repository can override `ssh_key` and `timeout` for itself, with git's
 own configuration:
@@ -244,6 +249,28 @@ A git configuration key cannot contain an underscore, so `ssh_key` in the
 INI file is `autogit.ssh-key` in a repository. `exclude` and `max_depth`
 decide what gets discovered in the first place, so they are read from
 `[DEFAULTS]` only.
+
+### Mirroring for air-gapped transfer
+
+```ini
+[DEFAULTS]
+mirror_dir = /srv/mirrors
+
+[MIRROR]
+path = https://github.com/example/project.git
+path = /srv/git/internal.git
+```
+
+Each source is mirrored to `<mirror_dir>/<name>.git`, where `<name>` is the
+last path element with any `.git` suffix removed. The first run clones with
+`--mirror`, every later run does `git remote update --prune`, so a ref
+deleted upstream disappears from the mirror as well.
+
+Submodules are followed: after a mirror is updated, the `url` entries in its
+`HEAD:.gitmodules` are mirrored the same way, and so are theirs, up to five
+levels deep. A relative URL such as `../shared.git` resolves against the
+source it came from, exactly as git resolves it, so a group of repositories
+that reference each other relatively mirrors as a group.
 
 ### Running several repositories at once
 

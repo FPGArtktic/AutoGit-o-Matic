@@ -17,7 +17,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-VERSION=2.2.0
+VERSION=2.3.0
 
 set -u
 
@@ -29,6 +29,8 @@ readonly PROGRAM_NAME=autogit-o-matic
 readonly OUTPUT_LIMIT=150
 # Seconds one git invocation may take, when timeout(1) is installed.
 readonly GIT_TIMEOUT=300
+# How deep submodule mirroring follows, so a cycle cannot spin forever.
+readonly MIRROR_MAX_DEPTH=5
 # Exit codes (CLAUDE.md 3.5). EXIT_FAILED is opt-in until 3.0.0.
 readonly EXIT_OK=0
 readonly EXIT_USAGE=1
@@ -418,8 +420,8 @@ git_pull() (
 # Print a checksum of every ref in REPO, so a mode's effect can be told
 # from no effect without knowing what the mode does.
 refs_fingerprint() (
-	git -C "${1}" for-each-ref --format='%(objectname) %(refname)' |
-		cksum
+	git -C "${1}" for-each-ref --format='%(objectname) %(refname)' \
+		2>/dev/null | cksum
 )
 
 # git_upstream REPO BRANCH
@@ -453,6 +455,34 @@ git_ff_branch() (
 		return 0
 	fi
 	return 2
+)
+
+# git_clone_mirror SOURCE DEST
+# Clone SOURCE into DEST as a mirror.
+git_clone_mirror() (
+	parent="${2%/*}"
+
+	mkdir -p -- "${parent}" || return 1
+	git_run "${parent}" clone --mirror -- "${1}" "${2}"
+)
+
+# git_remote_update DEST
+# Update every remote of the mirror DEST, pruning refs that are gone.
+git_remote_update() (
+	git_run "${1}" remote update --prune
+)
+
+# git_submodule_urls REPO
+# Print the submodule URLs recorded in REPO's HEAD .gitmodules.
+git_submodule_urls() (
+	git -C "${1}" show HEAD:.gitmodules 2>/dev/null |
+		awk '$1 == "url" { print $3 }'
+)
+
+# git_fsck REPO
+# Check REPO's object graph without reading every object.
+git_fsck() (
+	git_run "${1}" fsck --connectivity-only
 )
 
 # discovery_depth
@@ -507,6 +537,118 @@ discover_repos() (
 		base=/
 	fi
 	discover_in "${base}" "${depth}"
+)
+
+# yes_option KEY REPO
+# Returns 0 when KEY reads as a yes for REPO.
+yes_option() (
+	value="$(option_value "${1}" "${2}")"
+
+	case "${value}" in
+	yes | YES | Yes | true | 1)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+)
+
+# mirror_target SOURCE
+# Print where SOURCE is mirrored: mirror_dir plus the repository name.
+# Prints nothing when no mirror_dir is configured.
+mirror_target() (
+	root="$(section_values DEFAULTS mirror_dir | head -n 1)"
+	source="${1%/}"
+
+	if [ -z "${root}" ]; then
+		return 0
+	fi
+	name="${source##*/}"
+	printf '%s/%s.git\n' "${root%/}" "${name%.git}"
+)
+
+# resolve_url BASE URL
+# Print URL with any leading ./ or ../ resolved against BASE, which is
+# how git reads a relative submodule URL.
+resolve_url() (
+	base="${1%/}"
+	rest="${2}"
+
+	while :; do
+		case "${rest}" in
+		./*)
+			rest="${rest#./}"
+			;;
+		../*)
+			base="${base%/*}"
+			rest="${rest#../}"
+			;;
+		*)
+			break
+			;;
+		esac
+	done
+	if [ "${rest}" = "${2}" ]; then
+		printf '%s\n' "${2}"
+		return 0
+	fi
+	printf '%s/%s\n' "${base}" "${rest}"
+)
+
+# mirror_sync SOURCE DEST
+# Clone SOURCE into DEST the first time, update DEST after that.
+mirror_sync() (
+	if [ ! -d "${2}" ]; then
+		git_clone_mirror "${1}" "${2}"
+		return "$?"
+	fi
+	git_remote_update "${2}"
+)
+
+# tag_is_signed REPO TAG
+# Returns 0 when TAG is an annotated tag that carries a signature.
+tag_is_signed() (
+	git -C "${1}" cat-file tag "${2}" 2>/dev/null |
+		grep -q 'BEGIN PGP SIGNATURE'
+)
+
+# verify_tags REPO
+# Verify every signed tag in REPO. Returns 2 when one does not verify.
+verify_tags() (
+	tags="$(git -C "${1}" for-each-ref --format='%(refname:short)' \
+		refs/tags)"
+
+	while IFS= read -r tag; do
+		verify_one_tag "${1}" "${tag}" || return 2
+	done <<-EOF
+		${tags}
+	EOF
+)
+
+# verify_one_tag REPO TAG
+# Verify TAG when it is signed; an unsigned tag is nothing to check.
+verify_one_tag() (
+	if [ -z "${2}" ]; then
+		return 0
+	fi
+	if ! tag_is_signed "${1}" "${2}"; then
+		return 0
+	fi
+	git -C "${1}" verify-tag "${2}" >/dev/null 2>&1
+)
+
+# mirror_checks DEST
+# Run the optional integrity checks DEST asks for.
+# Returns 0 fine, 2 when a check failed.
+mirror_checks() (
+	if yes_option fsck "${1}"; then
+		git_fsck "${1}" >/dev/null || return 2
+	fi
+	if yes_option verify_tags "${1}"; then
+		verify_tags "${1}" || return 2
+	fi
+	return 0
 )
 
 # mode_verb MODE
@@ -597,11 +739,75 @@ dry_run_message() (
 	SILENT_UPDATE)
 		printf 'Would fetch and fast-forward what is safe\n'
 		;;
+	MIRROR)
+		printf 'Would clone or update the mirror\n'
+		;;
 	*)
 		verb="$(mode_verb "${1}")"
 		printf "Would execute 'git %s'\n" "${verb}"
 		;;
 	esac
+)
+
+# mirror_one_url SOURCE URL DEPTH
+# Mirror URL, which may be relative to SOURCE, one level deeper.
+mirror_one_url() (
+	if [ -z "${2}" ]; then
+		return 0
+	fi
+	resolved="$(resolve_url "${1}" "${2}")"
+
+	do_mirror "${resolved}" "$((${3} + 1))" >/dev/null
+)
+
+# mirror_url_list SOURCE URLS DEPTH
+# Mirror each of the newline-separated URLS, the relative ones against
+# SOURCE. Prints how many submodules came along.
+mirror_url_list() (
+	count=0
+
+	while IFS= read -r url; do
+		mirror_one_url "${1}" "${url}" "${3}" || return 2
+		count="$((count + 1))"
+	done <<-EOF
+		${2}
+	EOF
+	printf 'mirrored with %s submodule(s)\n' "${count}"
+)
+
+# mirror_submodules SOURCE DEST DEPTH
+# Mirror every submodule DEST records, stopping at MIRROR_MAX_DEPTH so
+# that a cycle in .gitmodules cannot spin forever.
+mirror_submodules() (
+	urls="$(git_submodule_urls "${2}")"
+
+	if [ -z "${urls}" ] || [ "${3}" -ge "${MIRROR_MAX_DEPTH}" ]; then
+		printf 'mirrored\n'
+		return 0
+	fi
+	mirror_url_list "${1}" "${urls}" "${3}"
+)
+
+# do_mirror SOURCE [DEPTH]
+# Clone or update the mirror of SOURCE under mirror_dir, then its
+# submodules. Returns 0 done, 1 skipped, 2 git error.
+do_mirror() (
+	dest="$(mirror_target "${1}")"
+	depth="${2:-0}"
+
+	if [ -z "${dest}" ]; then
+		printf 'no mirror_dir is configured\n'
+		return 1
+	fi
+	if ! output="$(mirror_sync "${1}" "${dest}")"; then
+		printf '%s\n' "${output}"
+		return 2
+	fi
+	if ! mirror_checks "${dest}"; then
+		printf 'integrity check failed\n'
+		return 2
+	fi
+	mirror_submodules "${1}" "${dest}" "${depth}"
 )
 
 # run_mode MODE REPO
@@ -617,9 +823,41 @@ run_mode() (
 	SILENT_UPDATE)
 		do_silent_update "${2}"
 		;;
+	MIRROR)
+		do_mirror "${2}"
+		;;
 	*)
 		printf 'unknown mode: %s\n' "${1}"
 		return 2
+		;;
+	esac
+)
+
+# section_targets MODE PATH
+# Print what MODE works on for PATH: every repository discovered under
+# it, or, for MIRROR, the source itself, which need not exist here yet.
+section_targets() (
+	case "${1}" in
+	MIRROR)
+		printf '%s\n' "${2}"
+		;;
+	*)
+		discover_repos "${2}"
+		;;
+	esac
+)
+
+# fingerprint_target MODE TARGET
+# Print the ref checksum that shows MODE's effect on TARGET. For MIRROR
+# the effect lands in the mirror, not in the source.
+fingerprint_target() (
+	case "${1}" in
+	MIRROR)
+		dest="$(mirror_target "${2}")"
+		refs_fingerprint "${dest}"
+		;;
+	*)
+		refs_fingerprint "${2}"
 		;;
 	esac
 )
@@ -628,7 +866,7 @@ run_mode() (
 # Log a successful MODE on REPO and tally it by whether BEFORE still
 # describes its refs.
 report_success() (
-	after="$(refs_fingerprint "${2}")"
+	after="$(fingerprint_target "${1}" "${2}")"
 
 	log "${1}" "${2}" Success "${4}"
 	if [ "${3}" = "${after}" ]; then
@@ -650,7 +888,7 @@ process_repo() (
 		tally_add unchanged
 		return 0
 	fi
-	before="$(refs_fingerprint "${2}")"
+	before="$(fingerprint_target "${1}" "${2}")"
 	output="$(run_mode "${1}" "${2}")"
 	result="$?"
 	if [ "${result}" -eq 0 ]; then
@@ -691,7 +929,7 @@ run_batch() (
 # Run MODE on every repository discovered under PATH, ${JOBS} at once.
 process_repos() (
 	verbose INFO "Processing ${1} operation for path: ${2}"
-	repos="$(discover_repos "${2}")"
+	repos="$(section_targets "${1}" "${2}")"
 
 	if [ -z "${repos}" ]; then
 		log ERROR "${2}" Failed 'No Git repositories found'
@@ -714,7 +952,7 @@ run_section() (
 # run_sections
 # Run every section the config defines, in the order 1.0.0 used.
 run_sections() (
-	for mode in PULL FETCH SILENT_UPDATE; do
+	for mode in PULL FETCH SILENT_UPDATE MIRROR; do
 		run_section "${mode}"
 	done
 )

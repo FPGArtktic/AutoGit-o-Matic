@@ -5,6 +5,25 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-10-14
+
+### Added
+
+- `[MIRROR]`: `git clone --mirror` into `mirror_dir` the first time a
+  source is seen, `git remote update --prune` after that, so refs
+  deleted upstream disappear from the mirror too. The section takes
+  sources rather than local paths, which is why `section_targets`
+  exists: a mirror source need not be a repository on this machine,
+  and discovery has nothing to walk.
+- Recursive submodule mirroring. The `url` entries in a mirror's
+  `HEAD:.gitmodules` are mirrored the same way, five levels deep at
+  most so that a cycle cannot spin forever. A relative URL such as
+  `../shared.git` resolves against the source it came from, the way
+  git resolves it.
+- `fsck = yes` and `verify_tags = yes` in `[DEFAULTS]`, which run
+  `git fsck --connectivity-only` and verify the signed tags of a
+  mirror after each update. An unsigned tag is not a failure.
+
 ## [2.2.0] - 2026-10-14
 
 ### Added
@@ -135,7 +154,8 @@ this project adheres to
 - TXT and JSON Lines log formats, selected by `log_format` in
   `[SETTINGS]`.
 
-[2.2.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.1.0...HEAD
+[2.3.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/FPGArtktic/AutoGit-o-Matic/releases/tag/v1.0.0

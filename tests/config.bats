@@ -106,6 +106,26 @@ setup() {
 	printf '%s\n' "$output" | jq -e . > /dev/null
 }
 
+@test "an ssh_key does not get in the way of a local fetch" {
+	git -C "$CLONE" config autogit.ssh-key /keys/deploy
+	printf '[FETCH]\npath = %s\n' "$CLONE" > config.ini
+
+	run_tool --config config.ini
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"FETCH: $CLONE - Success"* ]]
+}
+
+@test "a per-repo timeout is used for the git call" {
+	git -C "$CLONE" config autogit.timeout 60
+	printf '[FETCH]\npath = %s\n' "$CLONE" > config.ini
+
+	run_tool --config config.ini
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"FETCH: $CLONE - Success"* ]]
+}
+
 @test "[DEFAULTS] supplies an option the repository does not set" {
 	run_sourced "INI_STREAM=\"\$(printf 'DEFAULTS\\tssh_key\\t/from/defaults')\"
 		printf 'key=%s\\n' \"\$(option_value ssh_key '$CLONE')\""
